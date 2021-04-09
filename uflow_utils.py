@@ -1,5 +1,5 @@
 import torch
-import torch.nn.functional as F
+
 
 def flow_to_warp(flow):
   """Compute the warp from the flow field.
@@ -134,10 +134,10 @@ def compute_range_map(flow,
       flow_width += 2 * p
       # Apply padding in multiple steps to padd with the values on the edge.
       for _ in range(p):
-        flow = tf.pad(
-            tensor=flow,
-            paddings=[[0, 0], [1, 1], [1, 1], [0, 0]],
-            mode='SYMMETRIC')
+         flow = flow[None]
+         m = torch.nn.ReplicationPad3d((0, 0, 1, 1, 1, 1))
+         flow = m(flow)
+         flow = torch.squeeze(flow, 0)
       coords = flow_to_warp(flow) - p
     # Update the coordinate frame to the downsampled one.
     coords = (coords + (1 - downsampling_factor) * 0.5) / downsampling_factor
