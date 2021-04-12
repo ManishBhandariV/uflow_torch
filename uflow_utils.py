@@ -1,4 +1,5 @@
 import torch
+from torchvision import  transforms
 
 
 def flow_to_warp(flow):
@@ -147,19 +148,19 @@ def compute_range_map(flow,
     raise ValueError('downsampling_factor must be an integer >= 1.')
 
   # Split coordinates into an integer part and a float offset for interpolation.
-  coords_floor = tf.floor(coords)
+  coords_floor = torch.floor(coords)
   coords_offset = coords - coords_floor
-  coords_floor = tf.cast(coords_floor, 'int32')
+  coords_floor = coords.type(torch.int32)
 
   # Define a batch offset for flattened indexes into all pixels.
-  batch_range = tf.reshape(tf.range(batch_size), [batch_size, 1, 1])
-  idx_batch_offset = tf.tile(
+  batch_range = torch.reshape(torch.arange(batch_size), [batch_size, 1, 1])
+  idx_batch_offset = torch.tile(
       batch_range, [1, flow_height, flow_width]) * output_height * output_width
 
   # Flatten everything.
-  coords_floor_flattened = tf.reshape(coords_floor, [-1, 2])
-  coords_offset_flattened = tf.reshape(coords_offset, [-1, 2])
-  idx_batch_offset_flattened = tf.reshape(idx_batch_offset, [-1])
+  coords_floor_flattened = torch.reshape(coords_floor, [-1, 2])
+  coords_offset_flattened = torch.reshape(coords_offset, [-1, 2])
+  idx_batch_offset_flattened = torch.reshape(idx_batch_offset, [-1])
 
   # Initialize results.
   idxs_list = []
@@ -176,13 +177,13 @@ def compute_range_map(flow,
       idxs = idx_batch_offset_flattened + idxs_i * output_width + idxs_j
 
       # Only count valid pixels.
-      mask = tf.reshape(
-          tf.compat.v1.where(
-              tf.logical_and(
-                  tf.logical_and(idxs_i >= 0, idxs_i < output_height),
-                  tf.logical_and(idxs_j >= 0, idxs_j < output_width))), [-1])
-      valid_idxs = tf.gather(idxs, mask)
-      valid_offsets = tf.gather(coords_offset_flattened, mask)
+      mask = torch.reshape(torch.stack(
+          torch.where(
+              torch.logical_and(
+                  torch.logical_and(idxs_i >= 0, idxs_i < output_height),
+                  torch.logical_and(idxs_j >= 0, idxs_j < output_width)))), [-1])
+      valid_idxs = torch.gather(idxs, 0, mask)
+      valid_offsets = torch.gather(coords_offset_flattened, 0, mask)
 
       # Compute weights according to bilinear interpolation.
       weights_i = (1. - di) - (-1)**di * valid_offsets[:, 0]
@@ -194,13 +195,12 @@ def compute_range_map(flow,
       weights_list.append(weights)
 
   # Concatenate everything.
-  idxs = tf.concat(idxs_list, axis=0)
-  weights = tf.concat(weights_list, axis=0)
+  idxs = torch.cat(idxs_list, dim=0)
+  weights = torch.cat(weights_list, dim=0)
 
   # Sum up weights for each pixel and reshape the result.
-  counts = tf.math.unsorted_segment_sum(
-      weights, idxs, batch_size * output_height * output_width)
-  count_image = tf.reshape(counts, [batch_size, output_height, output_width, 1])
+  counts = torch.zeros(batch_size * output_height * output_width).scatter_add(0, idxs, weights)
+  count_image = torch.reshape(counts, [batch_size, output_height, output_width, 1])
 
   if downsampling_factor > 1:
     # Normalize the count image so that downsampling does not affect the counts.
@@ -477,8 +477,8 @@ def resize(img, height, width, is_flow, mask=None):
 
   def _resize(img, mask=None):
     # _, orig_height, orig_width, _ = img.shape.as_list()
-    orig_height = tf.shape(input=img)[1]
-    orig_width = tf.shape(input=img)[2]
+    orig_height = img.shape[1]
+    orig_width = img.shape[2]
 
     if orig_height == height and orig_width == width:
       # early return if no resizing is required
@@ -489,29 +489,35 @@ def resize(img, height, width, is_flow, mask=None):
 
     if mask is not None:
       # multiply with mask, to ensure non-valid locations are zero
-      img = tf.math.multiply(img, mask)
+      img = img * mask
       # resize image
-      img_resized = tf.compat.v2.image.resize(
-          img, (int(height), int(width)), antialias=True)
+      resize_transform = transforms.Compose([transforms.Resize((int(height), int(width)))])
+      img = torch.moveaxis(img,-1,1)
+      img_resized = resize_transform(img)
+      img_resized = torch.moveaxis(img_resized,1,-1)
       # resize mask (will serve as normalization weights)
-      mask_resized = tf.compat.v2.image.resize(
-          mask, (int(height), int(width)), antialias=True)
+      mask = torch.moveaxis(mask,-1,1)
+      mask_resized = resize_transform(mask)
+      mask_resized = torch.moveaxis(mask_resized,1,-1)
+      mask_resized_reciprocal = torch.reciprocal(mask_resized)
+      mask_resized_reciprocal[mask_resized_reciprocal == float("inf")] = 0
       # normalize sparse flow field and mask
-      img_resized = tf.math.multiply(img_resized,
-                                     tf.math.reciprocal_no_nan(mask_resized))
-      mask_resized = tf.math.multiply(mask_resized,
-                                      tf.math.reciprocal_no_nan(mask_resized))
+      img_resized = img_resized * mask_resized_reciprocal
+      mask_resized = mask_resized * mask_resized_reciprocal
+
     else:
       # normal resize without anti-alaising
-      img_resized = tf.compat.v2.image.resize(img, (int(height), int(width)))
-
+      resize_transform = transforms.Compose([transforms.Resize((int(height), int(width)))])
+      img = torch.moveaxis(img, -1, 1)
+      img_resized = resize_transform(img)
+      img_resized = torch.moveaxis(img_resized, 1, -1)
     if is_flow:
       # If image is a flow image, scale flow values to be consistent with the
       # new image size.
-      scaling = tf.reshape([
-          float(height) / tf.cast(orig_height, tf.float32),
-          float(width) / tf.cast(orig_width, tf.float32)
-      ], [1, 1, 1, 2])
+      scaling = torch.reshape(
+          torch.tensor([float(height) / orig_height,
+                        float(width) / orig_width])
+          , [1, 1, 1, 2])
       img_resized *= scaling
 
     if mask is not None:
@@ -519,7 +525,7 @@ def resize(img, height, width, is_flow, mask=None):
     return img_resized
 
   # Apply resizing at the right shape.
-  shape = img.shape.as_list()
+  shape = list(img.shape)
   if len(shape) == 3:
     if mask is not None:
       img_resized, mask_resized = _resize(img[None], mask[None])
@@ -531,9 +537,9 @@ def resize(img, height, width, is_flow, mask=None):
     return _resize(img, mask)
   elif len(shape) > 4:
     # Reshape input to [b, h, w, c], resize and reshape back.
-    img_flattened = tf.reshape(img, [-1] + shape[-3:])
+    img_flattened = torch.reshape(img, [-1] + shape[-3:])
     if mask is not None:
-      mask_flattened = tf.reshape(mask, [-1] + shape[-3:])
+      mask_flattened = torch.reshape(mask, [-1] + shape[-3:])
       img_resized, mask_resized = _resize(img_flattened, mask_flattened)
     else:
       img_resized = _resize(img_flattened)
@@ -541,13 +547,13 @@ def resize(img, height, width, is_flow, mask=None):
     # that fails to capture the value of height / width inside the closure,
     # leading the height / width undefined here. Call set_shape to make it
     # defined again.
-    img_resized.set_shape(
-        (img_resized.shape[0], height, width, img_resized.shape[3]))
-    result_img = tf.reshape(img_resized, shape[:-3] + img_resized.shape[-3:])
+    # img_resized.set_shape(
+    #     (img_resized.shape[0], height, width, img_resized.shape[3]))
+    result_img = torch.reshape(img_resized, shape[:-3] + img_resized.shape[-3:])
     if mask is not None:
-      mask_resized.set_shape(
-          (mask_resized.shape[0], height, width, mask_resized.shape[3]))
-      result_mask = tf.reshape(mask_resized,
+      # mask_resized.set_shape(
+      #     (mask_resized.shape[0], height, width, mask_resized.shape[3]))
+      result_mask = torch.reshape(mask_resized,
                                shape[:-3] + mask_resized.shape[-3:])
       return result_img, result_mask
     return result_img
