@@ -261,38 +261,33 @@ def compute_warps_and_occlusion(flows,
       # Compare forward and backward flow.
       flow_ji_in_i = resample(flow_ji, warps[key][level])
       fb_sq_diff[key].append(
-          tf.reduce_sum(
-              input_tensor=(flow_ij + flow_ji_in_i)**2, axis=-1, keepdims=True))
+          ((flow_ij + flow_ji_in_i)**2).sum(dim=-1, keepdim=True))
       fb_sum_sq[key].append(
-          tf.reduce_sum(
-              input_tensor=(flow_ij**2 + flow_ji_in_i**2),
-              axis=-1,
-              keepdims=True))
+          (flow_ij**2 + flow_ji_in_i**2).sum(dim=-1, keepdim=True))
 
       if level != 0:
         continue
 
       # This initializations avoids problems in tensorflow (likely AutoGraph)
-      occlusion_mask = tf.zeros_like(flow_ij[Ellipsis, :1], dtype=tf.float32)
-      occlusion_scores['forward_collision'] = tf.zeros_like(
-          flow_ij[Ellipsis, :1], dtype=tf.float32)
-      occlusion_scores['backward_zero'] = tf.zeros_like(
-          flow_ij[Ellipsis, :1], dtype=tf.float32)
-      occlusion_scores['fb_abs'] = tf.zeros_like(
-          flow_ij[Ellipsis, :1], dtype=tf.float32)
+      occlusion_mask = torch.zeros_like(flow_ij[Ellipsis, :1], dtype=torch.float32)
+      occlusion_scores['forward_collision'] = torch.zeros_like(
+          flow_ij[Ellipsis, :1], dtype=torch.float32)
+      occlusion_scores['backward_zero'] = torch.zeros_like(
+          flow_ij[Ellipsis, :1], dtype= torch.float32)
+      occlusion_scores['fb_abs'] = torch.zeros_like(
+          flow_ij[Ellipsis, :1], dtype=torch.float32)
 
       if occlusion_estimation == 'none' or (
           occ_active is not None and not occ_active[occlusion_estimation]):
-        occlusion_mask = tf.zeros_like(flow_ij[Ellipsis, :1], dtype=tf.float32)
+        occlusion_mask = torch.zeros_like(flow_ij[Ellipsis, :1], dtype=torch.float32)
 
       elif occlusion_estimation == 'brox':
-        occlusion_mask = tf.cast(
-            fb_sq_diff[key][level] > 0.01 * fb_sum_sq[key][level] + 0.5,
-            tf.float32)
+        occlusion_mask = fb_sq_diff[key][level] > 0.01 * fb_sum_sq[key][level] + 0.5
+        occlusion_mask = occlusion_mask.type(torch.float32)
 
       elif occlusion_estimation == 'fb_abs':
-        occlusion_mask = tf.cast(fb_sq_diff[key][level]**0.5 > 1.5, tf.float32)
-
+        occlusion_mask = fb_sq_diff[key][level]**0.5 > 1.5
+        occlusion_mask = occlusion_mask.type(torch.float32)
       elif occlusion_estimation == 'wang':
         range_maps_low_res[rev_key].append(
             compute_range_map(
@@ -303,7 +298,7 @@ def compute_warps_and_occlusion(flows,
         # Invert so that low values correspond to probable occlusions,
         # range [0, 1].
         occlusion_mask = (
-            1. - tf.clip_by_value(range_maps_low_res[rev_key][level], 0., 1.))
+            1. - torch.clamp(range_maps_low_res[rev_key][level], 0., 1.))
 
       elif occlusion_estimation == 'wang4':
         range_maps_low_res[rev_key].append(
@@ -315,7 +310,7 @@ def compute_warps_and_occlusion(flows,
         # Invert so that low values correspond to probable occlusions,
         # range [0, 1].
         occlusion_mask = (
-            1. - tf.clip_by_value(range_maps_low_res[rev_key][level], 0., 1.))
+            1. - torch.clamp(range_maps_low_res[rev_key][level], 0., 1.))
 
       elif occlusion_estimation == 'wangthres':
         range_maps_low_res[rev_key].append(
@@ -326,8 +321,8 @@ def compute_warps_and_occlusion(flows,
                 resize_output=True))
         # Invert so that low values correspond to probable occlusions,
         # range [0, 1].
-        occlusion_mask = tf.cast(range_maps_low_res[rev_key][level] < 0.75,
-                                 tf.float32)
+        occlusion_mask = range_maps_low_res[rev_key][level] < 0.75,
+        occlusion_mask = occlusion_mask.type(torch.float32)
 
       elif occlusion_estimation == 'wang4thres':
         range_maps_low_res[rev_key].append(
@@ -338,8 +333,8 @@ def compute_warps_and_occlusion(flows,
                 resize_output=True))
         # Invert so that low values correspond to probable occlusions,
         # range [0, 1].
-        occlusion_mask = tf.cast(range_maps_low_res[rev_key][level] < 0.75,
-                                 tf.float32)
+        occlusion_mask = range_maps_low_res[rev_key][level] < 0.75
+        occlusion_mask = occlusion_mask.type(torch.float32)
 
       elif occlusion_estimation == 'uflow':
         # Compute occlusion from the range map of the forward flow, projected
@@ -356,7 +351,7 @@ def compute_warps_and_occlusion(flows,
           fwd_range_map_in_i = resample(range_maps_high_res[key][level],
                                         warps[key][level])
           # Rescale to [0, max-1].
-          occlusion_scores['forward_collision'] = tf.clip_by_value(
+          occlusion_scores['forward_collision'] = torch.clamp(
               fwd_range_map_in_i, 1., occ_clip_max['forward_collision']) - 1.0
 
         # Compute occlusion from the range map of the backward flow, which is
@@ -373,7 +368,7 @@ def compute_warps_and_occlusion(flows,
           # Invert so that low values correspond to probable occlusions,
           # range [0, 1].
           occlusion_scores['backward_zero'] = (
-              1. - tf.clip_by_value(range_maps_low_res[rev_key][level], 0., 1.))
+              1. - torch.clamp(range_maps_low_res[rev_key][level], 0., 1.))
 
         # Compute occlusion from forward-backward consistency. If the flow
         # vectors are inconsistent, this means that they are either wrong or
@@ -381,13 +376,13 @@ def compute_warps_and_occlusion(flows,
         if 'fb_abs' in occ_weights and (occ_active is None or
                                         occ_active['fb_abs']):
           # Clip to [0, max].
-          occlusion_scores['fb_abs'] = tf.clip_by_value(
+          occlusion_scores['fb_abs'] = torch.clamp(
               fb_sq_diff[key][level]**0.5, 0.0, occ_clip_max['fb_abs'])
 
-        occlusion_logits = tf.zeros_like(flow_ij[Ellipsis, :1], dtype=tf.float32)
+        occlusion_logits = torch.zeros_like(flow_ij[Ellipsis, :1], dtype=torch.float32)
         for k, v in occlusion_scores.items():
           occlusion_logits += (v - occ_thresholds[k]) * occ_weights[k]
-        occlusion_mask = tf.sigmoid(occlusion_logits)
+        occlusion_mask = torch.sigmoid(occlusion_logits)
       else:
         raise ValueError('Unknown value for occlusion_estimation:',
                          occlusion_estimation)
@@ -404,8 +399,10 @@ def apply_warps_stop_grad(sources, warps, level):
   warped = dict()
   for (i, j, t) in warps:
     # Only propagate gradient through the warp, not through the source.
+    sources[j].requires_grad = False
+
     warped[(i, j, t)] = resample(
-        tf.stop_gradient(sources[j]), warps[(i, j, t)][level])
+        sources[j], warps[(i, j, t)][level])
 
   return warped
 
@@ -420,17 +417,20 @@ def upsample(img, is_flow):
   Returns:
     Resized and potentially scaled image or flow field.
   """
-  _, height, width, _ = img.shape.as_list()
+  _, height, width, _ = list(img.shape)
   orig_dtype = img.dtype
-  if orig_dtype != tf.float32:
-    img = tf.cast(img, tf.float32)
-  img_resized = tf.compat.v2.image.resize(img,
-                                          (int(height * 2), int(width * 2)))
+  if orig_dtype != torch.float32:
+    img = img.type(torch.float32)
+  resize_transform = transforms.Compose([transforms.Resize((int(height*2), int(width*2)))])
+  img = torch.moveaxis(img, -1, 1)
+  img_resized = resize_transform(img)
+  img_resized = torch.moveaxis(img_resized, 1, -1)
+
   if is_flow:
     # Scale flow values to be consistent with the new image size.
     img_resized *= 2
   if img_resized.dtype != orig_dtype:
-    return tf.cast(img_resized, orig_dtype)
+    return img_resized.type(orig_dtype)
   return img_resized
 
 
@@ -444,16 +444,18 @@ def downsample(img, is_flow):
   Returns:
     Resized and potentially scaled image or flow field.
   """
-  _, height, width, _ = img.shape.as_list()
-  img_resized = tf.compat.v2.image.resize(img,
-                                          (int(height / 2), int(width / 2)))
+  _, height, width, _ = list(img.shape)
+  resize_transform = transforms.Compose([transforms.Resize((int(height/2), int(width/2)))])
+  img = torch.moveaxis(img, -1, 1)
+  img_resized = resize_transform(img)
+  img_resized = torch.moveaxis(img_resized, 1, -1)
+
   if is_flow:
     # Scale flow values to be consistent with the new image size.
     img_resized /= 2
   return img_resized
 
 
-@tf.function
 def resize(img, height, width, is_flow, mask=None):
   """Resize an image or flow field to a new resolution.
 
@@ -578,20 +580,18 @@ def normalize_for_feature_metric_loss(features):
   for key, feature_map in features.items():
     # Normalize feature channels to have the same absolute activations.
     norm_feature_map = feature_map / (
-        tf.reduce_sum(
-            input_tensor=abs(feature_map), axis=[0, 1, 2], keepdims=True) +
+            (abs(feature_map)).sum(dim=[0, 1, 2], keepdim=True) +
         1e-16)
     # Normalize every pixel feature across all channels to have mean 1.
     norm_feature_map /= (
-        tf.reduce_sum(
-            input_tensor=abs(norm_feature_map), axis=[-1], keepdims=True) +
-        1e-16)
+        ((abs(norm_feature_map)).sum(dim=[-1], keepdim=True) +
+        1e-16))
     normalized_features[key] = norm_feature_map
   return normalized_features
 
 
 def l1(x):
-  return tf.abs(x + 1e-6)
+  return torch.abs(x + 1e-6)
 
 
 def robust_l1(x):
@@ -601,7 +601,7 @@ def robust_l1(x):
 
 def abs_robust_loss(diff, eps=0.01, q=0.4):
   """The so-called robust loss used by DDFlow."""
-  return tf.pow((tf.abs(diff) + eps), q)
+  return torch.pow((torch.abs(diff) + eps), q)
 
 
 def image_grads(image_batch, stride=1):
@@ -679,25 +679,27 @@ def compute_loss(
 
     if ground_truth_occlusions is None:
       if stop_gradient_mask:
-        mask_level0 = tf.stop_gradient(not_occluded_masks[key][0] *
-                                       valid_warp_masks[key][0])
+        mask_level0 = not_occluded_masks[key][0] *  valid_warp_masks[key][0]
+        mask_level0.requires_grad = False
       else:
         mask_level0 = not_occluded_masks[key][0] * valid_warp_masks[key][0]
     else:
       # For using ground truth mask
       if i > j:
         continue
-      ground_truth_occlusions = 1.0 - tf.cast(ground_truth_occlusions,
-                                              tf.float32)
-      mask_level0 = tf.stop_gradient(ground_truth_occlusions *
-                                     valid_warp_masks[key][0])
-      height, width = valid_warp_masks[key][1].get_shape().as_list()[-3:-1]
+      ground_truth_occlusions = ground_truth_occlusions.type(torch.float32)
+      ground_truth_occlusions = 1.0 - ground_truth_occlusions
+
+      mask_level0 = ground_truth_occlusions * valid_warp_masks[key][0]
+
+      mask_level0.requires_grad = False
+      height, width = list(valid_warp_masks[key][1].shape)[-3:-1]
 
     if 'photo' in weights:
       error = distance_metric_fns['photo'](images[i] - warped_images[key])
       losses['photo'] += (
-          weights['photo'] * tf.reduce_sum(input_tensor=mask_level0 * error) /
-          (tf.reduce_sum(input_tensor=mask_level0) + 1e-16) / num_pairs)
+          weights['photo'] * (mask_level0 * error).sum() /
+          (mask_level0.sum() + 1e-16) / num_pairs)
 
     if 'smooth2' in weights or 'smooth1' in weights:
 
@@ -714,7 +716,7 @@ def compute_loss(
       # Compute image gradients and sum them up to match the receptive field
       # of the flow gradients, which are computed at 1/4 resolution.
       images_level0 = images[i]
-      height, width = images_level0.shape.as_list()[-3:-1]
+      height, width = list(images_level0.shape)[-3:-1]
       # Resize two times for a smoother result.
       images_level1 = resize(
           images_level0, int(height) // 2, int(width) // 2, is_flow=False)
@@ -725,14 +727,8 @@ def compute_loss(
       if 'smooth1' in weights:
 
         img_gx, img_gy = image_grads(images_at_level[smoothness_at_level])
-        weights_x = tf.exp(-tf.reduce_mean(
-            input_tensor=(abs_fn(edge_constant * img_gx)),
-            axis=-1,
-            keepdims=True))
-        weights_y = tf.exp(-tf.reduce_mean(
-            input_tensor=(abs_fn(edge_constant * img_gy)),
-            axis=-1,
-            keepdims=True))
+        weights_x = torch.exp(-((abs_fn(edge_constant * img_gx)).mean(dim=-1, keepdim=True)))
+        weights_y = torch.exp(-((abs_fn(edge_constant * img_gy)).mean(dim=-1, keepdim=True)))
 
         # Compute second derivatives of the predicted smoothness.
         flow_gx, flow_gy = image_grads(flows[key][smoothness_at_level])
@@ -740,8 +736,8 @@ def compute_loss(
         # Compute weighted smoothness
         losses['smooth1'] += (
             weights['smooth1'] *
-            (tf.reduce_mean(input_tensor=weights_x * robust_l1(flow_gx)) +
-             tf.reduce_mean(input_tensor=weights_y * robust_l1(flow_gy))) / 2. /
+            ((weights_x * robust_l1(flow_gx)).sum() +
+             (weights_y * robust_l1(flow_gy)).sum()) / 2. /
             num_pairs)
 
         if plot_dir is not None:
@@ -753,14 +749,9 @@ def compute_loss(
 
         img_gx, img_gy = image_grads(
             images_at_level[smoothness_at_level], stride=2)
-        weights_xx = tf.exp(-tf.reduce_mean(
-            input_tensor=(abs_fn(edge_constant * img_gx)),
-            axis=-1,
-            keepdims=True))
-        weights_yy = tf.exp(-tf.reduce_mean(
-            input_tensor=(abs_fn(edge_constant * img_gy)),
-            axis=-1,
-            keepdims=True))
+        weights_xx = torch.exp(-(
+            (abs_fn(edge_constant * img_gx)).sum(dim=-1, keepdim=True)))
+        weights_yy = torch.exp(-((abs_fn(edge_constant * img_gy)).mean(dim=-1, keepdim=True)))
 
         # Compute second derivatives of the predicted smoothness.
         flow_gx, flow_gy = image_grads(flows[key][smoothness_at_level])
@@ -770,8 +761,8 @@ def compute_loss(
         # Compute weighted smoothness
         losses['smooth2'] += (
             weights['smooth2'] *
-            (tf.reduce_mean(input_tensor=weights_xx * robust_l1(flow_gxx)) +
-             tf.reduce_mean(input_tensor=weights_yy * robust_l1(flow_gyy))) /
+            ((weights_xx * robust_l1(flow_gxx)).mean() +
+             (weights_yy * robust_l1(flow_gyy)).mean()) /
             2. / num_pairs)
 
         if plot_dir is not None:
@@ -781,11 +772,11 @@ def compute_loss(
 
     if 'ssim' in weights:
       ssim_error, avg_weight = weighted_ssim(warped_images[key], images[i],
-                                             tf.squeeze(mask_level0, axis=-1))
+                                             torch.squeeze(mask_level0, dim=-1))
 
       losses['ssim'] += weights['ssim'] * (
-          tf.reduce_sum(input_tensor=ssim_error * avg_weight) /
-          (tf.reduce_sum(input_tensor=avg_weight) + 1e-16) / num_pairs)
+          (ssim_error * avg_weight).sum() /
+          ((avg_weight).sum() + 1e-16) / num_pairs)
 
     if 'census' in weights:
       losses['census'] += weights['census'] * census_loss(
@@ -802,10 +793,10 @@ def compute_loss(
       teacher_flow = selfsup_transform_fns[2](
           teacher_flow, i_or_ij=(i, j), is_flow=True)
       if selfsup_mask == 'gaussian':
-        student_fb_consistency = tf.exp(
+        student_fb_consistency = torch.exp(
             -fb_sq_diff[(i, j, 'transformed-student')][2] /
             (fb_sigma_student**2 * (h**2 + w**2)))
-        teacher_fb_consistency = tf.exp(
+        teacher_fb_consistency = torch.exp(
             -fb_sq_diff[(i, j, 'original-teacher')][2] / (fb_sigma_teacher**2 *
                                                           (h**2 + w**2)))
       elif selfsup_mask == 'advection':
@@ -818,12 +809,10 @@ def compute_loss(
             (i, j, 'transformed-student')][2]) + 0.5
         threshold_teacher = 0.01 * (fb_sum_sq[
             (i, j, 'original-teacher')][2]) + 0.5
-        student_fb_consistency = tf.cast(
-            fb_sq_diff[(i, j, 'transformed-student')][2] < threshold_student,
-            tf.float32)
-        teacher_fb_consistency = tf.cast(
-            fb_sq_diff[(i, j, 'original-teacher')][2] < threshold_teacher,
-            tf.float32)
+        student_fb_consistency = fb_sq_diff[(i, j, 'transformed-student')][2] < threshold_student
+        student_fb_consistency = student_fb_consistency.type(torch.float32)
+        teacher_fb_consistency = fb_sq_diff[(i, j, 'original-teacher')][2] < threshold_teacher
+        teacher_fb_consistency = teacher_fb_consistency.type(torch.float32)
       else:
         raise ValueError('Unknown selfsup_mask', selfsup_mask)
 
@@ -835,11 +824,13 @@ def compute_loss(
           valid_warp_masks[(i, j, 'original-teacher')][2])
       teacher_mask = selfsup_transform_fns[2](
           teacher_mask, i_or_ij=(i, j), is_flow=False)
-      error = robust_l1(tf.stop_gradient(teacher_flow) - student_flow)
-      mask = tf.stop_gradient(teacher_mask * student_mask)
+      teacher_flow.requires_grad = False
+      error = robust_l1(teacher_flow - student_flow)
+      mask = teacher_mask * student_mask
+      mask.requires_grad = False
       losses['selfsup'] += (
-          weights['selfsup'] * tf.reduce_sum(input_tensor=mask * error) /
-          (tf.reduce_sum(input_tensor=tf.ones_like(mask)) + 1e-16) / num_pairs)
+          weights['selfsup'] * (mask * error).sum() /
+          ((torch.ones_like(mask)).sum() + 1e-16) / num_pairs)
       if plot_dir is not None:
         uflow_plotting.plot_selfsup(key, images, flows, teacher_flow,
                                     student_flow, error, teacher_mask,
@@ -865,11 +856,11 @@ def supervised_loss(weights, ground_truth_flow, ground_truth_valid,
   error = robust_l1(ground_truth_flow - predicted_flow)
   if ground_truth_valid is None:
     b, h, w, _ = ground_truth_flow.shape.as_list()
-    ground_truth_valid = tf.ones((b, h, w, 1), tf.float32)
+    ground_truth_valid = torch.ones((b, h, w, 1), torch.float32)
   losses['supervision'] = (
       weights['supervision'] *
-      tf.reduce_sum(input_tensor=ground_truth_valid * error) /
-      (tf.reduce_sum(input_tensor=ground_truth_valid) + 1e-16))
+      (ground_truth_valid * error).sum() /
+      ((ground_truth_valid).sum() + 1e-16))
   losses['total'] = losses['supervision']
 
   return losses
@@ -1031,13 +1022,12 @@ def random_crop(batch, max_offset_height=32, max_offset_width=32):
   target_width = width - max_offset_width
 
   # Randomly sample offsets.
-  offsets_height = tf.random.uniform([batch_size],
-                                     maxval=max_offset_height + 1,
-                                     dtype=tf.int32)
-  offsets_width = tf.random.uniform([batch_size],
-                                    maxval=max_offset_width + 1,
-                                    dtype=tf.int32)
-  offsets = tf.stack([offsets_height, offsets_width], axis=-1)
+  offsets_height = (0 - (max_offset_height + 1)) * torch.rand([batch_size]) + (max_offset_height + 1)
+  offsets_height = offsets_height.type(torch.int32)
+  offsets_width = (0 - (max_offset_width + 1)) * torch.rand([batch_size]) + (max_offset_width + 1)
+  offsets_width = offsets_width.type(torch.int32)
+
+  offsets = torch.stack([offsets_height, offsets_width], dim=-1)
 
   # Loop over the batch and perform cropping.
   cropped_images = []
@@ -1048,7 +1038,7 @@ def random_crop(batch, max_offset_height=32, max_offset_width=32):
             image,
             begin=[offset_height, offset_width, 0],
             size=[target_height, target_width, num_channels]))
-  cropped_batch = tf.stack(cropped_images)
+  cropped_batch = torch.stack(cropped_images)
 
   return cropped_batch, offsets
 
