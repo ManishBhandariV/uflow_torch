@@ -1,5 +1,10 @@
 import torch
-from torchvision import  transforms
+from torchvision import transforms
+import  torch.nn.functional as F
+import time
+
+from uflow import uflow_plotting
+from uflow.uflow_resampler import resampler
 
 
 def flow_to_warp(flow):
@@ -1034,14 +1039,11 @@ def random_crop(batch, max_offset_height=32, max_offset_width=32):
   for image, offset_height, offset_width in zip(batch, offsets_height,
                                                 offsets_width):
     cropped_images.append(
-        tf.slice(
-            image,
-            begin=[offset_height, offset_width, 0],
-            size=[target_height, target_width, num_channels]))
+      image[offset_height:offset_height + target_height, offset_width:offset_width + target_width, 0:num_channels])
+
   cropped_batch = torch.stack(cropped_images)
 
   return cropped_batch, offsets
-
 
 def random_shift(batch, max_shift_height=32, max_shift_width=32):
   """Randomly shift a batch of images (with wrap around).
@@ -1062,23 +1064,22 @@ def random_shift(batch, max_shift_height=32, max_shift_width=32):
 
   # Randomly sample by how much the images are being shifted.
   batch_size, _, _, _ = batch.shape
-  shifts_height = tf.random.uniform([batch_size],
-                                    minval=-max_shift_height,
-                                    maxval=max_shift_height + 1,
-                                    dtype=tf.int32)
-  shifts_width = tf.random.uniform([batch_size],
-                                   minval=-max_shift_width,
-                                   maxval=max_shift_width + 1,
-                                   dtype=tf.int32)
-  shifts = tf.stack([shifts_height, shifts_width], axis=-1)
+  shifts_height = (-max_shift_height -(max_shift_height + 1))* torch.rand([batch_size]) + (max_shift_height + 1)
+  shifts_height = shifts_height.type(torch.int32)
+
+  shifts_width = (-max_shift_width - (max_shift_width + 1)) * torch.rand([batch_size]) + (max_shift_width + 1)
+  shifts_width = shifts_width.type(torch.int32)
+
+
+  shifts = torch.stack([shifts_height, shifts_width], dim=-1)
 
   # Loop over the batch and shift the images
   shifted_images = []
   for image, shift_height, shift_width in zip(batch, shifts_height,
                                               shifts_width):
     shifted_images.append(
-        tf.roll(image, shift=[shift_height, shift_width], axis=[0, 1]))
-  shifted_images = tf.stack(shifted_images)
+        torch.roll(image, shifts=[shift_height, shift_width], dims=[0, 1]))
+  shifted_images = torch.stack(shifted_images)
 
   return shifted_images, shifts
 
@@ -1114,17 +1115,13 @@ def randomly_shift_features(feature_pyramid,
 
   # Randomly sample by how much the images are being shifted at the top level
   # and scale the shift back to level 0 (original image resolution).
-  shifts_height = top_level_scale * tf.random.uniform(
-      [batch_size],
-      minval=-max_shift_height_top_level,
-      maxval=max_shift_height_top_level + 1,
-      dtype=tf.int32)
-  shifts_width = top_level_scale * tf.random.uniform(
-      [batch_size],
-      minval=-max_shift_width_top_level,
-      maxval=max_shift_width_top_level + 1,
-      dtype=tf.int32)
-  shifts = tf.stack([shifts_height, shifts_width], axis=-1)
+  shifts_height = top_level_scale *((-max_shift_height_top_level - (max_shift_height_top_level + 1))*torch.rand([batch_size]) + (max_shift_height_top_level + 1))
+  shifts_height = shifts_height.type(torch.int32)
+
+  shifts_width = top_level_scale *((-max_shift_width_top_level - (max_shift_width_top_level + 1))*torch.rand([batch_size]) + (max_shift_width_top_level + 1))
+  shifts_width = shifts_width.type(torch.int32)
+
+  shifts = torch.stack([shifts_height, shifts_width], dim=-1)
 
   # Iterate over pyramid levels.
   shifted_features = []
@@ -1132,25 +1129,25 @@ def randomly_shift_features(feature_pyramid,
     shifts_at_this_level = shifts // 2**level
     # pylint:disable=g-complex-comprehension
     shifted_features.append(
-        tf.stack([
-            tf.roll(
+        torch.stack([
+            torch.roll(
                 feature_image_batch[i],
-                shift=shifts_at_this_level[i],
-                axis=[0, 1]) for i in range(batch_size)
+                shifts=shifts_at_this_level[i],
+                dims=[0, 1]) for i in range(batch_size)
         ],
-                 axis=0))
+                 dim=0))
 
-  return shifted_features, tf.cast(shifts, dtype=tf.float32)
+  return shifted_features, shifts.type(torch.float32)
 
 
 def zero_mask_border(mask_bhw3, patch_size):
   """Used to ignore border effects from census_transform."""
   mask_padding = patch_size // 2
   mask = mask_bhw3[:, mask_padding:-mask_padding, mask_padding:-mask_padding, :]
-  return tf.pad(
-      tensor=mask,
-      paddings=[[0, 0], [mask_padding, mask_padding],
-                [mask_padding, mask_padding], [0, 0]])
+
+  return torch.nn.functional.pad(mask, (0, 0, mask_padding, mask_padding,
+                mask_padding, mask_padding, 0, 0), mode='constant', value=0)
+
 
 
 def census_transform(image, patch_size):
@@ -1164,15 +1161,21 @@ def census_transform(image, patch_size):
   Returns:
     image with census transform applied
   """
-  intensities = tf.image.rgb_to_grayscale(image) * 255
-  kernel = tf.reshape(
-      tf.eye(patch_size * patch_size),
+  rgb_weights = torch.tensor([0.2989, 0.5870, 0.1140])
+  intensities = torch.unsqueeze(torch.tensordot(image,rgb_weights,([-1],[-1])),-1) * 255
+  kernel = torch.reshape(
+      torch.eye(patch_size * patch_size),
       (patch_size, patch_size, 1, patch_size * patch_size))
-  neighbors = tf.nn.conv2d(
-      input=intensities, filters=kernel, strides=[1, 1, 1, 1], padding='SAME')
+
+  intensities = torch.moveaxis(intensities,-1,1)
+  kernel = torch.moveaxis(kernel,-1,1)
+  neighbors = F.conv2d(input=torch.moveaxis(intensities, -1, 1), weight=torch.moveaxis(kernel, [-1, -2], [0, 1]),
+                       padding=(int((patch_size - 1) / 2), int((patch_size - 1) / 2)))
+  neighbors = torch.moveaxis(neighbors, 1, -1)
+
   diff = neighbors - intensities
   # Coefficients adopted from DDFlow.
-  diff_norm = diff / tf.sqrt(.81 + tf.square(diff))
+  diff_norm = diff / torch.sqrt(.81 + torch.square(diff))
   return diff_norm
 
 
@@ -1189,10 +1192,10 @@ def soft_hamming(a_bhwk, b_bhwk, thresh=.1):
     more different than thresh and approx. 0 if significantly less
     different than thresh.
   """
-  sq_dist_bhwk = tf.square(a_bhwk - b_bhwk)
+  sq_dist_bhwk = torch.square(a_bhwk - b_bhwk)
   soft_thresh_dist_bhwk = sq_dist_bhwk / (thresh + sq_dist_bhwk)
-  return tf.reduce_sum(
-      input_tensor=soft_thresh_dist_bhwk, axis=3, keepdims=True)
+  return soft_thresh_dist_bhwk.sum(dim = 3, keepdim = True)
+
 
 
 def census_loss(image_a_bhw3,
@@ -1210,9 +1213,10 @@ def census_loss(image_a_bhw3,
   padded_mask_bhw3 = zero_mask_border(mask_bhw3, patch_size)
   diff = distance_metric_fn(hamming_bhw1)
   diff *= padded_mask_bhw3
-  diff_sum = tf.reduce_sum(input_tensor=diff)
-  loss_mean = diff_sum / (
-      tf.reduce_sum(input_tensor=tf.stop_gradient(padded_mask_bhw3) + 1e-6))
+  diff_sum = diff.sum()
+  padded_mask_bhw3.requires_grad = False
+  loss_mean = diff_sum / (( padded_mask_bhw3 + 1e-6).sum())
+
   return loss_mean
 
 
@@ -1234,7 +1238,7 @@ def time_it(f, num_reps=1, execute_once_before=False):
     x = f()
   # Make sure that there is nothing still running on the GPU by waiting for the
   # completion of a bogus command.
-  _ = tf.square(tf.random.uniform([1])).numpy()
+  _ = torch.square(tf.random.uniform([1])).numpy()
   # Time f for a number of repetitions.
   start_in_s = time.time()
   for _ in range(num_reps):
@@ -1254,7 +1258,8 @@ def time_it(f, num_reps=1, execute_once_before=False):
 
 
 def _avg_pool3x3(x):
-  return tf.nn.avg_pool(x, [1, 3, 3, 1], [1, 1, 1, 1], 'VALID')
+  return torch.moveaxis(torch.nn.functional.avg_pool2d(torch.moveaxis(x,-1,1), (3,3), (1,1)),1,-1)
+
 
 
 def weighted_ssim(x, y, weight, c1=float('inf'), c2=9e-6, weight_epsilon=0.01):
@@ -1288,7 +1293,7 @@ def weighted_ssim(x, y, weight, c1=float('inf'), c2=9e-6, weight_epsilon=0.01):
   if c1 == float('inf') and c2 == float('inf'):
     raise ValueError('Both c1 and c2 are infinite, SSIM loss is zero. This is '
                      'likely unintended.')
-  weight = tf.expand_dims(weight, -1)
+  weight = torch.unsqueeze(weight, -1)
   average_pooled_weight = _avg_pool3x3(weight)
   weight_plus_epsilon = weight + weight_epsilon
   inverse_average_pooled_weight = 1.0 / (average_pooled_weight + weight_epsilon)
@@ -1312,4 +1317,4 @@ def weighted_ssim(x, y, weight, c1=float('inf'), c2=9e-6, weight_epsilon=0.01):
     ssim_n = (2 * mu_x * mu_y + c1) * (2 * sigma_xy + c2)
     ssim_d = (mu_x**2 + mu_y**2 + c1) * (sigma_x + sigma_y + c2)
   result = ssim_n / ssim_d
-  return tf.clip_by_value((1 - result) / 2, 0, 1), average_pooled_weight
+  return torch.clamp((1 - result) / 2, 0, 1), average_pooled_weight
