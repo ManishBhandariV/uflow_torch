@@ -2,14 +2,27 @@ import tensorflow as tf
 import numpy as np
 
 
-# image = tf.reshape(tf.range(346752, dtype= tf.float32),(3,172,224,3))
-batch_size = 3
-height = 172
-width = 224
-flow_01 = np.ones((batch_size, height, width, 2)) * 4.
-flow_01 = tf.Variable(flow_01.astype(np.float32))
-# flow_01 = tf.convert_to_tensor(value=flow_01.astype(np.float32))
-print(flow_01.dtype)
+params = tf.reshape(tf.range(50, dtype= tf.float32),(1,5,5,2))
+indices = tf.Variable([1,2,3,4])
+
+params_shape = tf.shape(params)
+indices_shape = tf.shape(indices)
+slice_dimensions = indices_shape[-1]
+
+max_index = params_shape[:slice_dimensions] - 1
+min_index = tf.zeros_like(max_index, dtype=tf.int32)
+
+clipped_indices = tf.clip_by_value(indices, min_index, max_index)
+
+# Check whether each component of each index is in range [min, max], and
+# allow an index only if all components are in range:
+mask = tf.reduce_all(
+  tf.logical_and(indices >= min_index, indices <= max_index), -1)
+
+print(mask)
+# print(max_index)
+# print(min_index)
+mask = tf.expand_dims(mask, -1)
 
 
 
