@@ -18,6 +18,33 @@
 import torch
 
 
+def torch_gather_nd(params, indices):
+  params = torch.moveaxis(params, 1, -1)
+  indices = torch.moveaxis(indices, 1, -1)
+  if len(indices.shape) <= 2:
+    ans = [params[(*indi,)] for indi in indices]
+    return torch.stack(ans)
+  elif len(indices.shape) == 3:
+    b = []
+    for i in indices:
+      a = []
+      for j in i:
+        a.append(params[(*j,)])
+      b.append(torch.tensor(a))
+    return torch.stack(b)
+  else:
+    c = []
+    for i in indices:
+      b = []
+      for j in i:
+        a = []
+        for k in j:
+          a.append(params[(*k,)])
+        b.append(torch.stack(a))
+      c.append(torch.stack(b))
+    d = torch.stack(c)
+    d = torch.moveaxis(d, -1, 1)
+    return d
 def safe_gather_nd(params, indices):
   """Gather slices from params into a Tensor with shape specified by indices.
 
@@ -35,14 +62,9 @@ def safe_gather_nd(params, indices):
     indices.shape[:-1] + params.shape[indices.shape[-1]:].
   """
   params_shape = torch.tensor(params.shape, dtype= torch.int32)
-  indices_shape = torch.tensor(indices.shape, dtype= torch.int32)
-  slice_dimensions = indices_shape[-1]
-
-  max_index = params_shape[:slice_dimensions] - 1
+  max_index = params_shape - 1
   min_index = torch.zeros_like(max_index, dtype=torch.int32)
-
   clipped_indices = torch.min(torch.max(indices, min_index), max_index)
-
 
   # Check whether each component of each index is in range [min, max], and
   # allow an index only if all components are in range:
@@ -50,7 +72,7 @@ def safe_gather_nd(params, indices):
       torch.logical_and(indices >= min_index, indices <= max_index), -1, dtype= params.dtype)
   mask = torch.unsqueeze(mask, -1)
 
-  return (mask *  tf.gather_nd(params, clipped_indices))
+  return (mask *  torch_gather_nd(params, clipped_indices))
 
 
 def resampler(data, warp, name='resampler'):
@@ -69,8 +91,8 @@ def resampler(data, warp, name='resampler'):
   """
   data = torch.tensor(data)
   warp = torch.tensor(warp)
-  with tf.name_scope(name + '/unstack_warp'):
-    warp_x, warp_y = tf.unstack(warp, axis=-1)
+  warp_x, warp_y = torch.unbind(warp, dim= 1)
+
   return resampler_with_unstacked_warp(data, warp_x, warp_y, name=name)
 
 
@@ -108,71 +130,70 @@ def resampler_with_unstacked_warp(data,
     ValueError: If warp_x, warp_y and data have incompatible shapes.
   """
 
-  with tf.name_scope(name):
-    warp_x = tf.convert_to_tensor(warp_x)
-    warp_y = tf.convert_to_tensor(warp_y)
-    data = tf.convert_to_tensor(data)
-    if not warp_x.shape.is_compatible_with(warp_y.shape):
-      raise ValueError(
-          'warp_x and warp_y are of incompatible shapes: %s vs %s ' %
-          (str(warp_x.shape), str(warp_y.shape)))
-    warp_shape = tf.shape(warp_x)
-    if warp_x.shape[0] != data.shape[0]:
-      raise ValueError(
-          '\'warp_x\' and \'data\' must have compatible first '
-          'dimension (batch size), but their shapes are %s and %s ' %
-          (str(warp_x.shape[0]), str(data.shape[0])))
-    # Compute the four points closest to warp with integer value.
-    warp_floor_x = tf.math.floor(warp_x)
-    warp_floor_y = tf.math.floor(warp_y)
-    # Compute the weight for each point.
-    right_warp_weight = warp_x - warp_floor_x
-    down_warp_weight = warp_y - warp_floor_y
 
-    warp_floor_x = tf.cast(warp_floor_x, tf.int32)
-    warp_floor_y = tf.cast(warp_floor_y, tf.int32)
-    warp_ceil_x = tf.cast(tf.math.ceil(warp_x), tf.int32)
-    warp_ceil_y = tf.cast(tf.math.ceil(warp_y), tf.int32)
+  warp_x = torch.tensor(warp_x)
+  warp_y = torch.tensor(warp_y)
+  data = torch.tensor(data)
+  if not warp_x.shape == warp_y.shape:
+    raise ValueError(
+        'warp_x and warp_y are of incompatible shapes: %s vs %s ' %
+        (str(warp_x.shape), str(warp_y.shape)))
+  warp_shape = torch.tensor(warp_x.shape)
+  if warp_x.shape[0] != data.shape[0]:
+    raise ValueError(
+        '\'warp_x\' and \'data\' must have compatible first '
+        'dimension (batch size), but their shapes are %s and %s ' %
+        (str(warp_x.shape[0]), str(data.shape[0])))
+  # Compute the four points closest to warp with integer value.
+  warp_floor_x = torch.floor(warp_x)
+  warp_floor_y = torch.floor(warp_y)
+  # Compute the weight for each point.
+  right_warp_weight = warp_x - warp_floor_x
+  down_warp_weight = warp_y - warp_floor_y
 
-    left_warp_weight = tf.subtract(
-        tf.convert_to_tensor(1.0, right_warp_weight.dtype), right_warp_weight)
-    up_warp_weight = tf.subtract(
-        tf.convert_to_tensor(1.0, down_warp_weight.dtype), down_warp_weight)
+  warp_floor_x = warp_floor_x.type(torch.int32)
+  warp_floor_y = warp_floor_y.type(torch.int32)
+  warp_ceil_x = torch.ceil(warp_x).type(torch.int32)
+  warp_ceil_y = torch.ceil(warp_y).type(torch.int32)
 
-    # Extend warps from [batch_size, dim_0, ... , dim_n, 2] to
-    # [batch_size, dim_0, ... , dim_n, 3] with the first element in last
-    # dimension being the batch index.
+  left_warp_weight = torch.subtract(
+      torch.tensor(1.0, dtype= right_warp_weight.dtype), right_warp_weight)
+  up_warp_weight = torch.subtract(
+      torch.tensor(1.0, dtype= down_warp_weight.dtype), down_warp_weight)
 
-    # A shape like warp_shape but with all sizes except the first set to 1:
-    warp_batch_shape = tf.concat(
-        [warp_shape[0:1], tf.ones_like(warp_shape[1:])], 0)
+  # Extend warps from [batch_size, dim_0, ... , dim_n, 2] to
+  # [batch_size, dim_0, ... , dim_n, 3] with the first element in last
+  # dimension being the batch index.
 
-    warp_batch = tf.reshape(
-        tf.range(warp_shape[0], dtype=tf.int32), warp_batch_shape)
+  # A shape like warp_shape but with all sizes except the first set to 1:
+  # warp_batch_shape = torch.cat(
+  #     [warp_shape[0:1], torch.ones_like(warp_shape[1:])], 0)
 
-    # Broadcast to match shape:
-    warp_batch += tf.zeros_like(warp_y, dtype=tf.int32)
-    left_warp_weight = tf.expand_dims(left_warp_weight, axis=-1)
-    down_warp_weight = tf.expand_dims(down_warp_weight, axis=-1)
-    up_warp_weight = tf.expand_dims(up_warp_weight, axis=-1)
-    right_warp_weight = tf.expand_dims(right_warp_weight, axis=-1)
+  warp_batch = torch.arange(warp_shape[0], dtype=torch.int32).reshape(warp_shape[0:1],*torch.ones_like(warp_shape[1:]).tolist())
 
-    up_left_warp = tf.stack([warp_batch, warp_floor_y, warp_floor_x], axis=-1)
-    up_right_warp = tf.stack([warp_batch, warp_floor_y, warp_ceil_x], axis=-1)
-    down_left_warp = tf.stack([warp_batch, warp_ceil_y, warp_floor_x], axis=-1)
-    down_right_warp = tf.stack([warp_batch, warp_ceil_y, warp_ceil_x], axis=-1)
+  # Broadcast to match shape:
+  warp_batch = warp_batch +  torch.zeros_like(warp_y, dtype=torch.int32)
+  left_warp_weight = torch.unsqueeze(left_warp_weight, dim=1)
+  down_warp_weight = torch.unsqueeze(down_warp_weight, dim=1)
+  up_warp_weight = torch.unsqueeze(up_warp_weight, dim = 1)
+  right_warp_weight = torch.unsqueeze(right_warp_weight, dim = 1)
 
-    def gather_nd(params, indices):
-      return (safe_gather_nd if safe else tf.gather_nd)(params, indices)
+  up_left_warp = torch.stack([warp_batch, warp_floor_y, warp_floor_x], dim=1)
+  up_right_warp = torch.stack([warp_batch, warp_floor_y, warp_ceil_x], dim=1)
+  down_left_warp = torch.stack([warp_batch, warp_ceil_y, warp_floor_x], dim =1)
+  down_right_warp = torch.stack([warp_batch, warp_ceil_y, warp_ceil_x], dim=1)
 
-    # gather data then take weighted average to get resample result.
-    result = (
-        (gather_nd(data, up_left_warp) * left_warp_weight +
-         gather_nd(data, up_right_warp) * right_warp_weight) * up_warp_weight +
-        (gather_nd(data, down_left_warp) * left_warp_weight +
-         gather_nd(data, down_right_warp) * right_warp_weight) *
-        down_warp_weight)
-    result_shape = (
-        warp_x.get_shape().as_list() + data.get_shape().as_list()[-1:])
-    result.set_shape(result_shape)
-    return result
+  def gather_nd(params, indices):
+    return (safe_gather_nd if safe else torch_gather_nd)(params, indices)
+
+  # gather data then take weighted average to get resample result.
+  result = (
+      (gather_nd(data, up_left_warp) * left_warp_weight +
+       gather_nd(data, up_right_warp) * right_warp_weight) * up_warp_weight +
+      (gather_nd(data, down_left_warp) * left_warp_weight +
+       gather_nd(data, down_right_warp) * right_warp_weight) *
+      down_warp_weight)
+  result_shape = (
+      list(warp_x.shape()) + list(data.shape())[-1:])
+  result.set_shape(result_shape)
+  return result

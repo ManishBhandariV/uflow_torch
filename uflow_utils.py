@@ -3,6 +3,8 @@ from torchvision import transforms
 import  torch.nn.functional as F
 import time
 
+import uflow_resampler
+
 # from uflow import uflow_plotting
 # from uflow.uflow_resampler import resampler
 
@@ -18,12 +20,13 @@ def flow_to_warp(flow):
   """
 
   # Construct a grid of the image coordinates.
-  height, width = list(flow.shape)[-3:-1]
+  _, _, height, width = list(flow.shape)
+  # height, width = list(flow.shape)[-3:-1]
   i_grid, j_grid = torch.meshgrid(
       torch.linspace(0.0,height - 1.0, steps= int(height)),
       torch.linspace(0.0,width - 1.0, steps= int(width)))
 
-  grid = torch.stack((i_grid,j_grid), dim= 2)
+  grid = torch.stack((i_grid,j_grid), dim= 0)
 
   # Potentially add batch dimension to match the shape of flow.
   if len(flow.shape) == 4:
@@ -84,7 +87,8 @@ def resample(source, coords):
     coords = coords.type(torch.float32)
   coords_rank = len(coords.shape)
   if coords_rank == 4:
-    output = resampler(source, coords[:, :, :, ::-1])
+    output = uflow_resampler.resampler(source, coords)
+    # output = uflow_resampler.resampler(source, coords[:, ::-1, :, :])
     if orig_source_dtype != source.dtype:
       return output.type(orig_source_dtype)
     return output
@@ -422,14 +426,15 @@ def upsample(img, is_flow):
   Returns:
     Resized and potentially scaled image or flow field.
   """
-  _, height, width, _ = list(img.shape)
+  # _, height, width, _ = list(img.shape)
+  _, _, height, width = list(img.shape)
   orig_dtype = img.dtype
   if orig_dtype != torch.float32:
     img = img.type(torch.float32)
   resize_transform = transforms.Compose([transforms.Resize((int(height*2), int(width*2)))])
-  img = torch.moveaxis(img, -1, 1)
+  # img = torch.moveaxis(img, -1, 1)
   img_resized = resize_transform(img)
-  img_resized = torch.moveaxis(img_resized, 1, -1)
+  # img_resized = torch.moveaxis(img_resized, 1, -1)
 
   if is_flow:
     # Scale flow values to be consistent with the new image size.
