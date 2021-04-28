@@ -8,16 +8,25 @@ from tensorflow.keras.layers import Conv2DTranspose
 from tensorflow.keras.layers import LeakyReLU
 from tensorflow.keras.models import Sequential
 
-a = tf.reshape(tf.range(2*3*3, dtype= tf.float32),(3,3,2))
-# # a = tf.Variable(a)
-# b = tf.reshape(tf.zeros((1,40,40,1), dtype= tf.int32),(1,40,40,1))
-# b = tf.Variable(b)
-# b[0,39,39,:] = 0
-warp = tf.reshape(tf.range(40*40, dtype=tf.int32),(1,40,40))
-warp_shape = tf.shape(warp)
+# a = tf.reshape(tf.range(2*3*3, dtype= tf.float32),(3,3,2))
+# # # a = tf.Variable(a)
+# # b = tf.reshape(tf.zeros((1,40,40,1), dtype= tf.int32),(1,40,40,1))
+# # b = tf.Variable(b)
+# # b[0,39,39,:] = 0
+# warp = tf.reshape(tf.range(40*40, dtype=tf.int32),(1,40,40))
+# warp_shape = tf.shape(warp)
+#
+# warp_batch_shape = tf.concat(
+#         [warp_shape[0:1], tf.ones_like(warp_shape[1:])], 0)
+# warp_batch = tf.reshape(tf.range(warp_shape[0], dtype=tf.int32),warp_batch_shape)
+# warp_batch += tf.zeros_like(warp, dtype= tf.int32)
+# print(tf.reduce_sum(warp_batch))
 
-warp_batch_shape = tf.concat(
-        [warp_shape[0:1], tf.ones_like(warp_shape[1:])], 0)
-warp_batch = tf.reshape(tf.range(warp_shape[0], dtype=tf.int32),warp_batch_shape)
-warp_batch += tf.zeros_like(warp, dtype= tf.int32)
-print(tf.reduce_sum(warp_batch))
+t = tf.constant([[-1, 0., 10.], [-1, 0, 10],[-5,200,4]])
+t = tf.reshape(tf.range(1*2*2*3, dtype= tf.float32),(1,2,2,3))
+clip_min = [5,13,15]
+print(t)
+t3 = tf.clip_by_value(t, clip_value_min=clip_min, clip_value_max=100)
+print(t3[:,:,:,2])
+
+

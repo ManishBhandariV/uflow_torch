@@ -128,7 +128,7 @@ class PWCFlow(torch.nn.Module):
     self._accumulate_flow = accumulate_flow
     self._shared_flow_decoder = shared_flow_decoder
 
-    self._refine_model = self._build_refinement_model()
+    self._refine_model = None
     self._flow_layers = None
     if not self._use_cost_volume:
       self._cost_volume_surrogate_convs = self._build_cost_volume_surrogate_convs(
@@ -248,8 +248,9 @@ class PWCFlow(torch.nn.Module):
 
     # Refine flow at level 1.
     refine = torch.cat([context, flow], dim= 1)
-    pad = torch.nn.ConstantPad2d((2,2,2,2),0)
+    pad = torch.nn.ConstantPad2d((1,1,1,1),0)
     refine = pad(refine)
+    self._refine_model = self._build_refinement_model(in_channel = refine.shape[1])
     refinement = self._refine_model(refine)
     if (training and self._drop_out_rate):
       refine_if= torch.greater(torch.rand([]), self._drop_out_rate)
@@ -311,16 +312,23 @@ class PWCFlow(torch.nn.Module):
       result.append(layers)
     return result
 
-  def _build_refinement_model(self):
+  def _build_refinement_model(self, in_channel):
     """Build model for flow refinement using dilated convolutions."""
     layers = []
-    # layers.append(Concatenate(axis=-1))
-    for c, d in [(128, 1), (128, 2), (128, 4), (96, 8), (64, 16), (32, 1)]:
-      layers.append(
-        torch.nn.Conv2d(in_channels=c, out_channels= int(c * self._channel_multiplier), kernel_size= (3,3), padding= (d,d), dilation= (d,d))
-      )
+    c_d = [(128, 1), (128, 2), (128, 4), (96, 8), (64, 16), (32, 1)]
+    for i in range(len(c_d)):
+
+      if i == 0:
+        layers.append(
+          torch.nn.Conv2d(in_channels= in_channel , out_channels=int(c_d[i][0] * self._channel_multiplier), kernel_size=(3, 3),
+                          padding=(c_d[i][1], c_d[i][1]), dilation=(c_d[i][1], c_d[i][1]))
+        )
+      else:
+        layers.append(
+          torch.nn.Conv2d(in_channels= c_d[i-1][0], out_channels= int(c_d[i][0] * self._channel_multiplier), kernel_size= (3,3), padding= (c_d[i][1],c_d[i][1]), dilation= (c_d[i][1],c_d[i][1]))
+        )
       layers.append(torch.nn.LeakyReLU(negative_slope= self._leaky_relu_alpha))
-      layers.append(torch.nn.Conv2d(in_channels= c, out_channels= 2, kernel_size= (3,3)))
+    layers.append(torch.nn.Conv2d(in_channels= 32, out_channels= 2, kernel_size= (3,3)))
 
     return torch.nn.Sequential(*layers)
 
@@ -465,3 +473,4 @@ flow_model = PWCFlow()
 a = torch.arange(1*640*640*3, dtype= torch.float32).reshape(1,3,640,640)
 feat_a = feat_model(a)
 b = flow_model(feat_a,feat_a)
+for i in b:print(i.shape)

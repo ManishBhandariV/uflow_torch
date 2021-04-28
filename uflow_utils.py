@@ -63,37 +63,57 @@ def mask_invalid(coords):
   mask = mask.type(torch.float32)[:, :, :, None]
   return mask
 
-
 def resample(source, coords):
   """Resample the source image at the passed coordinates.
-
   Args:
-    source: tensor, batch of images to be resampled.
-    coords: tensor, batch of coordinates in the image.
-
+    source: tf.tensor, batch of images to be resampled.
+    coords: [B, 2, H, W] tf.tensor, batch of coordinates in the image.
   Returns:
     The resampled image.
-
   Coordinates should be between 0 and size-1. Coordinates outside of this range
   are handled by interpolating with a background image filled with zeros in the
   same way that SAME size convolution works.
   """
 
-  # Wrap this function because it uses a different order of height/width dims.
-  orig_source_dtype = source.dtype
-  if source.dtype != torch.float32:
-    source = source.type(torch.float32)
-  if coords.dtype != torch.float32:
-    coords = coords.type(torch.float32)
-  coords_rank = len(coords.shape)
-  if coords_rank == 4:
-    output = uflow_resampler.resampler(source, coords)
-    # output = uflow_resampler.resampler(source, coords[:, ::-1, :, :])
-    if orig_source_dtype != source.dtype:
-      return output.type(orig_source_dtype)
-    return output
-  else:
-    raise NotImplementedError()
+  _, _, h, w = source.shape
+  # normalize coordinates to [-1 .. 1] range
+  coords = coords.clone()
+  coords[:, 0, :, :] = 2.0 * coords[:, 0, :, :].clone() / max(h - 1, 1) - 1.0
+  coords[:, 1, :, :] = 2.0 * coords[:, 1, :, :].clone() / max(w - 1, 1) - 1.0
+  coords = coords.permute(0, 2, 3, 1)
+  output = torch.nn.functional.grid_sample(source, coords, align_corners=False)
+  return output
+
+# def resample(source, coords):
+#   """Resample the source image at the passed coordinates.
+#
+#   Args:
+#     source: tensor, batch of images to be resampled.
+#     coords: tensor, batch of coordinates in the image.
+#
+#   Returns:
+#     The resampled image.
+#
+#   Coordinates should be between 0 and size-1. Coordinates outside of this range
+#   are handled by interpolating with a background image filled with zeros in the
+#   same way that SAME size convolution works.
+#   """
+#
+#   # Wrap this function because it uses a different order of height/width dims.
+#   orig_source_dtype = source.dtype
+#   if source.dtype != torch.float32:
+#     source = source.type(torch.float32)
+#   if coords.dtype != torch.float32:
+#     coords = coords.type(torch.float32)
+#   coords_rank = len(coords.shape)
+#   if coords_rank == 4:
+#     output = uflow_resampler.resampler(source, coords)
+#     # output = uflow_resampler.resampler(source, coords[:, ::-1, :, :])
+#     if orig_source_dtype != source.dtype:
+#       return output.type(orig_source_dtype)
+#     return output
+#   else:
+#     raise NotImplementedError()
 
 
 def compute_range_map(flow,
