@@ -343,7 +343,7 @@ class PWCFlow(torch.nn.Module):
     return result
 
 
-class PWCFeaturePyramid_torch(torch.nn.Module):
+class PWCFeaturePyramid(torch.nn.Module):
   """Model for computing a feature pyramid from an image."""
 
   def __init__(self,
@@ -381,7 +381,7 @@ class PWCFeaturePyramid_torch(torch.nn.Module):
       use_bfloat16: bool, whether or not to run in bfloat16 mode.
     """
 
-    super(PWCFeaturePyramid_torch, self).__init__()
+    super(PWCFeaturePyramid, self).__init__()
     self._use_bfloat16 = use_bfloat16
     if use_bfloat16:
       torch.set_default_dtype(torch.bfloat16)

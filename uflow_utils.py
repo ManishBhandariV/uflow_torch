@@ -146,7 +146,7 @@ def compute_range_map(flow,
   input_shape = list(flow.shape)
   if len(input_shape) != 4:
     raise NotImplementedError()
-  batch_size, input_height, input_width, _ = input_shape
+  batch_size, _,  input_height, input_width = input_shape
 
   flow_height = input_height
   flow_width = input_width
@@ -164,10 +164,10 @@ def compute_range_map(flow,
       flow_width += 2 * p
       # Apply padding in multiple steps to padd with the values on the edge.
       for _ in range(p):
-         flow = flow[None]
-         m = torch.nn.ReplicationPad3d((0, 0, 1, 1, 1, 1))
+         # flow = flow[None]
+         m = torch.nn.ReplicationPad2d((1, 1, 1, 1))
          flow = m(flow)
-         flow = torch.squeeze(flow, 0)
+         # flow = torch.squeeze(flow, 0)
       coords = flow_to_warp(flow) - p
     # Update the coordinate frame to the downsampled one.
     coords = (coords + (1 - downsampling_factor) * 0.5) / downsampling_factor
@@ -298,17 +298,17 @@ def compute_warps_and_occlusion(flows,
         continue
 
       # This initializations avoids problems in tensorflow (likely AutoGraph)
-      occlusion_mask = torch.zeros_like(flow_ij[Ellipsis, :1], dtype=torch.float32)
+      occlusion_mask = torch.zeros_like(flow_ij[:, :1, Ellipsis], dtype=torch.float32)
       occlusion_scores['forward_collision'] = torch.zeros_like(
-          flow_ij[Ellipsis, :1], dtype=torch.float32)
+          flow_ij[:, :1, Ellipsis], dtype=torch.float32)
       occlusion_scores['backward_zero'] = torch.zeros_like(
-          flow_ij[Ellipsis, :1], dtype= torch.float32)
+          flow_ij[:, :1, Ellipsis], dtype= torch.float32)
       occlusion_scores['fb_abs'] = torch.zeros_like(
-          flow_ij[Ellipsis, :1], dtype=torch.float32)
+          flow_ij[:, :1, Ellipsis], dtype=torch.float32)
 
       if occlusion_estimation == 'none' or (
           occ_active is not None and not occ_active[occlusion_estimation]):
-        occlusion_mask = torch.zeros_like(flow_ij[Ellipsis, :1], dtype=torch.float32)
+        occlusion_mask = torch.zeros_like(flow_ij[:, :1, Ellipsis], dtype=torch.float32)
 
       elif occlusion_estimation == 'brox':
         occlusion_mask = fb_sq_diff[key][level] > 0.01 * fb_sum_sq[key][level] + 0.5
@@ -509,8 +509,8 @@ def resize(img, height, width, is_flow, mask=None):
 
   def _resize(img, mask=None):
     # _, orig_height, orig_width, _ = img.shape.as_list()
-    orig_height = img.shape[1]
-    orig_width = img.shape[2]
+    orig_height = img.shape[2]
+    orig_width = img.shape[3]
 
     if orig_height == height and orig_width == width:
       # early return if no resizing is required
@@ -524,13 +524,13 @@ def resize(img, height, width, is_flow, mask=None):
       img = img * mask
       # resize image
       resize_transform = transforms.Compose([transforms.Resize((int(height), int(width)))])
-      img = torch.moveaxis(img,-1,1)
+      # img = torch.moveaxis(img,-1,1)
       img_resized = resize_transform(img)
-      img_resized = torch.moveaxis(img_resized,1,-1)
+      # img_resized = torch.moveaxis(img_resized,1,-1)
       # resize mask (will serve as normalization weights)
-      mask = torch.moveaxis(mask,-1,1)
+      # mask = torch.moveaxis(mask,-1,1)
       mask_resized = resize_transform(mask)
-      mask_resized = torch.moveaxis(mask_resized,1,-1)
+      # mask_resized = torch.moveaxis(mask_resized,1,-1)
       mask_resized_reciprocal = torch.reciprocal(mask_resized)
       mask_resized_reciprocal[mask_resized_reciprocal == float("inf")] = 0
       # normalize sparse flow field and mask
@@ -540,16 +540,16 @@ def resize(img, height, width, is_flow, mask=None):
     else:
       # normal resize without anti-alaising
       resize_transform = transforms.Compose([transforms.Resize((int(height), int(width)))])
-      img = torch.moveaxis(img, -1, 1)
+      # img = torch.moveaxis(img, -1, 1)
       img_resized = resize_transform(img)
-      img_resized = torch.moveaxis(img_resized, 1, -1)
+      # img_resized = torch.moveaxis(img_resized, 1, -1)
     if is_flow:
       # If image is a flow image, scale flow values to be consistent with the
       # new image size.
       scaling = torch.reshape(
           torch.tensor([float(height) / orig_height,
                         float(width) / orig_width])
-          , [1, 1, 1, 2])
+          , [1, 2, 1, 1])
       img_resized *= scaling
 
     if mask is not None:
