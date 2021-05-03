@@ -468,9 +468,3 @@ class PWCFeaturePyramid(torch.nn.Module):
 
     return features
 
-feat_model = PWCFeaturePyramid_torch()
-flow_model = PWCFlow()
-a = torch.arange(1*640*640*3, dtype= torch.float32).reshape(1,3,640,640)
-feat_a = feat_model(a)
-b = flow_model(feat_a,feat_a)
-for i in b:print(i.shape)

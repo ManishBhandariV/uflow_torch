@@ -187,8 +187,9 @@ def compute_range_map(flow,
       batch_range, [1, flow_height, flow_width]) * output_height * output_width
 
   # Flatten everything.
-  coords_floor_flattened = torch.reshape(coords_floor, [-1, 2])
-  coords_offset_flattened = torch.reshape(coords_offset, [-1, 2])
+
+  coords_floor_flattened = torch.reshape(torch.squeeze(coords_floor,0), [2, -1])
+  coords_offset_flattened = torch.reshape(torch.squeeze(coords_offset,0), [2, -1])
   idx_batch_offset_flattened = torch.reshape(idx_batch_offset, [-1])
 
   # Initialize results.
@@ -200,8 +201,8 @@ def compute_range_map(flow,
     for dj in range(2):
 
       # Compute the neighboring pixel coordinates.
-      idxs_i = coords_floor_flattened[:, 0] + di
-      idxs_j = coords_floor_flattened[:, 1] + dj
+      idxs_i = coords_floor_flattened[0, :] + di
+      idxs_j = coords_floor_flattened[1, :] + dj
       # Compute the flat index into all pixels.
       idxs = idx_batch_offset_flattened + idxs_i * output_width + idxs_j
 
@@ -212,11 +213,11 @@ def compute_range_map(flow,
                   torch.logical_and(idxs_i >= 0, idxs_i < output_height),
                   torch.logical_and(idxs_j >= 0, idxs_j < output_width)))), [-1])
       valid_idxs = torch.gather(idxs, 0, mask)
-      valid_offsets = torch.gather(coords_offset_flattened, 0, mask)
+      valid_offsets = torch.gather(coords_offset_flattened, 1, torch.stack((mask,mask), dim = 0))
 
       # Compute weights according to bilinear interpolation.
-      weights_i = (1. - di) - (-1)**di * valid_offsets[:, 0]
-      weights_j = (1. - dj) - (-1)**dj * valid_offsets[:, 1]
+      weights_i = (1. - di) - (-1)**di * valid_offsets[0]
+      weights_j = (1. - dj) - (-1)**dj * valid_offsets[1]
       weights = weights_i * weights_j
 
       # Append indices and weights to the corresponding list.
@@ -229,7 +230,7 @@ def compute_range_map(flow,
 
   # Sum up weights for each pixel and reshape the result.
   counts = torch.zeros(batch_size * output_height * output_width).scatter_add(0, idxs, weights)
-  count_image = torch.reshape(counts, [batch_size, output_height, output_width, 1])
+  count_image = torch.reshape(counts, [batch_size, 1, output_height, output_width])
 
   if downsampling_factor > 1:
     # Normalize the count image so that downsampling does not affect the counts.
@@ -290,9 +291,9 @@ def compute_warps_and_occlusion(flows,
       # Compare forward and backward flow.
       flow_ji_in_i = resample(flow_ji, warps[key][level])
       fb_sq_diff[key].append(
-          ((flow_ij + flow_ji_in_i)**2).sum(dim=-1, keepdim=True))
+          ((flow_ij + flow_ji_in_i)**2).sum(dim=1, keepdim=True))
       fb_sum_sq[key].append(
-          (flow_ij**2 + flow_ji_in_i**2).sum(dim=-1, keepdim=True))
+          (flow_ij**2 + flow_ji_in_i**2).sum(dim=1, keepdim=True))
 
       if level != 0:
         continue
@@ -408,7 +409,7 @@ def compute_warps_and_occlusion(flows,
           occlusion_scores['fb_abs'] = torch.clamp(
               fb_sq_diff[key][level]**0.5, 0.0, occ_clip_max['fb_abs'])
 
-        occlusion_logits = torch.zeros_like(flow_ij[Ellipsis, :1], dtype=torch.float32)
+        occlusion_logits = torch.zeros_like(flow_ij[:,:1,Ellipsis], dtype=torch.float32)
         for k, v in occlusion_scores.items():
           occlusion_logits += (v - occ_thresholds[k]) * occ_weights[k]
         occlusion_mask = torch.sigmoid(occlusion_logits)
@@ -635,8 +636,8 @@ def abs_robust_loss(diff, eps=0.01, q=0.4):
 
 
 def image_grads(image_batch, stride=1):
-  image_batch_gh = image_batch[:, stride:] - image_batch[:, :-stride]
-  image_batch_gw = image_batch[:, :, stride:] - image_batch[:, :, :-stride]
+  image_batch_gh = image_batch[:, :, stride:] - image_batch[:, :, :-stride]
+  image_batch_gw = image_batch[Ellipsis, stride:] - image_batch[Ellipsis, :-stride]
   return image_batch_gh, image_batch_gw
 
 
@@ -723,7 +724,7 @@ def compute_loss(
       mask_level0 = ground_truth_occlusions * valid_warp_masks[key][0]
 
       mask_level0.requires_grad = False
-      height, width = list(valid_warp_masks[key][1].shape)[-3:-1]
+      height, width = list(valid_warp_masks[key][1].shape)[-2:]
 
     if 'photo' in weights:
       error = distance_metric_fns['photo'](images[i] - warped_images[key])
@@ -746,7 +747,7 @@ def compute_loss(
       # Compute image gradients and sum them up to match the receptive field
       # of the flow gradients, which are computed at 1/4 resolution.
       images_level0 = images[i]
-      height, width = list(images_level0.shape)[-3:-1]
+      height, width = list(images_level0.shape)[-2:]
       # Resize two times for a smoother result.
       images_level1 = resize(
           images_level0, int(height) // 2, int(width) // 2, is_flow=False)
@@ -757,8 +758,8 @@ def compute_loss(
       if 'smooth1' in weights:
 
         img_gx, img_gy = image_grads(images_at_level[smoothness_at_level])
-        weights_x = torch.exp(-((abs_fn(edge_constant * img_gx)).mean(dim=-1, keepdim=True)))
-        weights_y = torch.exp(-((abs_fn(edge_constant * img_gy)).mean(dim=-1, keepdim=True)))
+        weights_x = torch.exp(-((abs_fn(edge_constant * img_gx)).mean(dim=1, keepdim=True)))
+        weights_y = torch.exp(-((abs_fn(edge_constant * img_gy)).mean(dim=1, keepdim=True)))
 
         # Compute second derivatives of the predicted smoothness.
         flow_gx, flow_gy = image_grads(flows[key][smoothness_at_level])
@@ -780,8 +781,8 @@ def compute_loss(
         img_gx, img_gy = image_grads(
             images_at_level[smoothness_at_level], stride=2)
         weights_xx = torch.exp(-(
-            (abs_fn(edge_constant * img_gx)).sum(dim=-1, keepdim=True)))
-        weights_yy = torch.exp(-((abs_fn(edge_constant * img_gy)).mean(dim=-1, keepdim=True)))
+            (abs_fn(edge_constant * img_gx)).sum(dim=1, keepdim=True)))
+        weights_yy = torch.exp(-((abs_fn(edge_constant * img_gy)).mean(dim=1, keepdim=True)))
 
         # Compute second derivatives of the predicted smoothness.
         flow_gx, flow_gy = image_grads(flows[key][smoothness_at_level])
@@ -802,7 +803,7 @@ def compute_loss(
 
     if 'ssim' in weights:
       ssim_error, avg_weight = weighted_ssim(warped_images[key], images[i],
-                                             torch.squeeze(mask_level0, dim=-1))
+                                             torch.squeeze(mask_level0, dim= 1))
 
       losses['ssim'] += weights['ssim'] * (
           (ssim_error * avg_weight).sum() /
@@ -817,7 +818,7 @@ def compute_loss(
 
     if 'selfsup' in weights:
       assert selfsup_transform_fns is not None
-      _, h, w, _ = flows[key][2].shape.as_list()
+      _, _, h, w = list(flows[key][2].shape)
       teacher_flow = flows[(i, j, 'original-teacher')][2]
       student_flow = flows[(i, j, 'transformed-student')][2]
       teacher_flow = selfsup_transform_fns[2](
@@ -880,13 +881,15 @@ def supervised_loss(weights, ground_truth_flow, ground_truth_valid,
   predicted_flow = predicted_flows[(0, 1, 'augmented')][0]
   # resize flow to match ground truth (only changes resolution if ground truth
   # flow was not resized during loading (resize_gt_flow=False)
-  _, height, width, _ = ground_truth_flow.get_shape().as_list()
+  _, _, height, width = list(ground_truth_flow.shape)
+  # _, height, width, _ = ground_truth_flow.get_shape().as_list()
   predicted_flow = resize(predicted_flow, height, width, is_flow=True)
   # compute error/loss metric
   error = robust_l1(ground_truth_flow - predicted_flow)
   if ground_truth_valid is None:
-    b, h, w, _ = ground_truth_flow.shape.as_list()
-    ground_truth_valid = torch.ones((b, h, w, 1), torch.float32)
+    b, _, h, w = list(ground_truth_flow.shape)
+    # b, h, w, _ = ground_truth_flow.shape.as_list()
+    ground_truth_valid = torch.ones((b, 1, h, w), torch.float32)
   losses['supervision'] = (
       weights['supervision'] *
       (ground_truth_valid * error).sum() /
@@ -1283,7 +1286,7 @@ def time_it(f, num_reps=1, execute_once_before=False):
 
 
 def _avg_pool3x3(x):
-  return torch.moveaxis(torch.nn.functional.avg_pool2d(torch.moveaxis(x,-1,1), (3,3), (1,1)),1,-1)
+  return torch.nn.functional.avg_pool2d(x, (3,3), (1,1))
 
 
 
@@ -1318,7 +1321,7 @@ def weighted_ssim(x, y, weight, c1=float('inf'), c2=9e-6, weight_epsilon=0.01):
   if c1 == float('inf') and c2 == float('inf'):
     raise ValueError('Both c1 and c2 are infinite, SSIM loss is zero. This is '
                      'likely unintended.')
-  weight = torch.unsqueeze(weight, -1)
+  weight = torch.unsqueeze(weight, 1)
   average_pooled_weight = _avg_pool3x3(weight)
   weight_plus_epsilon = weight + weight_epsilon
   inverse_average_pooled_weight = 1.0 / (average_pooled_weight + weight_epsilon)
