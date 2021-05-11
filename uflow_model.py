@@ -128,16 +128,23 @@ class PWCFlow(torch.nn.Module):
     self._accumulate_flow = accumulate_flow
     self._shared_flow_decoder = shared_flow_decoder
 
-    self._refine_model = None
-    self._flow_layers = None
+    self._refine_model = self._build_refinement_model(in_channel= 34)
+    # self._refine_model = None
+
+    self._flow_layers = self._build_flow_layers(in_channels= int(81 + self._num_context_up_channels * self._channel_multiplier))
+    # self._flow_layers = None
+
     if not self._use_cost_volume:
-      self._cost_volume_surrogate_convs = self._build_cost_volume_surrogate_convs(
-      )
+      self._cost_volume_surrogate_convs = self._build_cost_volume_surrogate_convs()
+
     if num_channels_upsampled_context:
-      self._context_up_layers = None
+      self._context_up_layers = self._build_upsample_layers(in_channels= int(self._num_context_up_channels * self._channel_multiplier), out_channels= int(self._num_context_up_channels * self._channel_multiplier))
+      # self._context_up_layers = None
+
     if self._shared_flow_decoder:
       # pylint:disable=invalid-name
       self._1x1_shared_decoder = self._build_1x1_shared_decoder()
+      # self._1x1_shared_decoder = None
 
 
 
@@ -210,11 +217,11 @@ class PWCFlow(torch.nn.Module):
       # Use dense-net connections.
       x_out = None
       if self._shared_flow_decoder:
-        self._flow_layers = self._build_flow_layers(in_channels=x_in.shape[1])
+        # self._flow_layers = self._build_flow_layers(in_channels=x_in.shape[1])
         # reuse the same flow decoder on all levels
         flow_layers = self._flow_layers
       else:
-        self._flow_layers = self._build_flow_layers(in_channels=x_in.shape[1])
+        # self._flow_layers = self._build_flow_layers(in_channels=x_in.shape[1])
         flow_layers = self._flow_layers[level]
       for layer in flow_layers[:-1]:
         pad = torch.nn.ConstantPad2d((1, 1, 1, 1), 0)
@@ -240,8 +247,8 @@ class PWCFlow(torch.nn.Module):
       # Upsample flow for the next lower level.
       flow_up = uflow_utils.upsample(flow, is_flow=True)
       if self._num_context_up_channels:
-        self._context_up_layers = self._build_upsample_layers(in_channels= context.shape[1] , out_channels=int(self._num_context_up_channels * self._channel_multiplier))
-        context_up = self._context_up_layers(context)
+        # self._context_up_layers = self._build_upsample_layers(in_channels= context.shape[1] , out_channels=int(self._num_context_up_channels * self._channel_multiplier))
+        context_up = self._context_up_layers[level](context)
 
       # Append results to list.
       flows.insert(0, flow)
@@ -250,7 +257,7 @@ class PWCFlow(torch.nn.Module):
     refine = torch.cat([context, flow], dim= 1)
     pad = torch.nn.ConstantPad2d((1,1,1,1),0)
     refine = pad(refine)
-    self._refine_model = self._build_refinement_model(in_channel = refine.shape[1])
+    # self._refine_model = self._build_refinement_model(in_channel = refine.shape[1])
     refinement = self._refine_model(refine)
     if (training and self._drop_out_rate):
       refine_if= torch.greater(torch.rand([]), self._drop_out_rate)
@@ -261,7 +268,7 @@ class PWCFlow(torch.nn.Module):
     return [flow.type(torch.float32) for flow in flows]
 
   def _build_cost_volume_surrogate_convs(self):
-    layers = []
+    layers = torch.nn.ModuleList()
     for i in range(self._num_levels):
       if i == 0:
         layers.append(torch.nn.Conv2d(in_channels= 6, out_channels= int(64* self._channel_multiplier),
@@ -275,35 +282,49 @@ class PWCFlow(torch.nn.Module):
   def _build_upsample_layers(self, in_channels, out_channels):
     """Build layers for upsampling via deconvolution."""
 
-    layer = torch.nn.ConvTranspose2d(in_channels= in_channels, out_channels= out_channels,
-                                      kernel_size= (4,4), stride=(2, 2), padding=(1, 1))
-    # layers = []
-    # for i in range(self._num_levels):
+    # layer = torch.nn.ConvTranspose2d(in_channels= in_channels, out_channels= out_channels,
+    #                                   kernel_size= (4,4), stride=(2, 2), padding=(1, 1))
+    layers = torch.nn.ModuleList()
+    for i in range(self._num_levels):
     #   if i == 0:
     #     layers.append(torch.nn.ConvTranspose2d(in_channels=3, out_channels=num_channels,
     #                              kernel_size=(4, 4), stride=(2, 2), padding=(1, 1)))
     #   else:
-    #     layers.append(torch.nn.ConvTranspose2d(in_channels= num_channels, out_channels= num_channels,
-    #                                   kernel_size= (4,4), stride=(2, 2), padding=(1, 1)))
+      layers.append(torch.nn.ConvTranspose2d(in_channels= in_channels, out_channels= out_channels,
+                                  kernel_size= (4,4), stride=(2, 2), padding=(1, 1)))
 
-    return layer
+    return layers
 
   def _build_flow_layers(self, in_channels):
     """Build layers for flow estimation."""
     # Empty list of layers level 0 because flow is only estimated at levels > 0.
-    result = [[]]
-    for _ in range(1, self._num_levels):
-      layers = []
+    # result = [[]]
+    result = torch.nn.ModuleList()
+    result.append(torch.nn.Conv2d(in_channels= in_channels, out_channels= in_channels, kernel_size= (1,1)))
+    for j in range(1, self._num_levels):
+      # layers = []
+      layers = torch.nn.ModuleList()
       c = [128, 128, 96, 64, 32]
       for i in range(len(c)):
-        if i == 0:
+        if i == 0 and j== self._num_levels-1:
           layers.append(torch.nn.Sequential(
-            torch.nn.Conv2d(in_channels=in_channels, out_channels=int(c[i] * self._channel_multiplier), kernel_size=(3, 3),
+            torch.nn.Conv2d(in_channels=113, out_channels=int(c[i] * self._channel_multiplier), kernel_size=(3, 3),
+                            stride=(1, 1)),
+            torch.nn.LeakyReLU(negative_slope=self._leaky_relu_alpha)))
+        elif j==self._num_levels-1:
+          layers.append(torch.nn.Sequential(
+            torch.nn.Conv2d(in_channels=113 + sum(c[:i]), out_channels=int(c[i] * self._channel_multiplier),
+                            kernel_size=(3, 3), stride=(1, 1)),
+            torch.nn.LeakyReLU(negative_slope=self._leaky_relu_alpha)))
+
+        elif i == 0:
+          layers.append(torch.nn.Sequential(
+            torch.nn.Conv2d(in_channels=147, out_channels=int(c[i] * self._channel_multiplier), kernel_size=(3, 3),
                             stride=(1, 1)),
             torch.nn.LeakyReLU(negative_slope=self._leaky_relu_alpha)))
         else:
           layers.append(torch.nn.Sequential(
-            torch.nn.Conv2d(in_channels= in_channels + sum(c[:i]), out_channels= int(c[i] * self._channel_multiplier),kernel_size= (3,3), stride= (1,1)),
+            torch.nn.Conv2d(in_channels= 147 + sum(c[:i]), out_channels= int(c[i] * self._channel_multiplier),kernel_size= (3,3), stride= (1,1)),
             torch.nn.LeakyReLU(negative_slope= self._leaky_relu_alpha)))
       layers.append(torch.nn.Conv2d(in_channels= c[i], out_channels= 2, kernel_size= (3,3)))
 
@@ -314,7 +335,8 @@ class PWCFlow(torch.nn.Module):
 
   def _build_refinement_model(self, in_channel):
     """Build model for flow refinement using dilated convolutions."""
-    layers = []
+    # layers = []
+    layers = torch.nn.ModuleList()
     c_d = [(128, 1), (128, 2), (128, 4), (96, 8), (64, 16), (32, 1)]
     for i in range(len(c_d)):
 
@@ -336,7 +358,9 @@ class PWCFlow(torch.nn.Module):
   def _build_1x1_shared_decoder(self):
     """Build layers for flow estimation."""
     # Empty list of layers level 0 because flow is only estimated at levels > 0.
-    result = [[]]
+    # result = [[]]
+    result = torch.nn.ModuleList()
+    result.append(torch.nn.Conv2d(in_channels= 32, out_channels= 32, kernel_size= (1,1), stride= (1,1)))
     for _ in range(1, self._num_levels):
       result.append(
           torch.nn.Conv2d(in_channels= 32, out_channels= 32, kernel_size= (1,1), stride= (1,1)))
@@ -404,11 +428,13 @@ class PWCFeaturePyramid(torch.nn.Module):
     assert all(t[0] > 0 for t in filters)
 
     self._leaky_relu_alpha = leaky_relu_alpha
-    self._convs = []
+    # self._convs = []
+    self._convs = torch.nn.ModuleList()
     self._level1_num_1x1 = level1_num_1x1
 
     for level, (num_layers, num_filters) in enumerate(filters):
-      group = []
+      # group = []
+      group = torch.nn.ModuleList()
       for i in range(num_layers):
         stride = 1
         if i == 0 or (i == 1 and level == 0 and

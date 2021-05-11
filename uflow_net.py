@@ -4,6 +4,7 @@ import time
 import torch
 from torch.utils.tensorboard import SummaryWriter
 
+import uflow_flags
 import uflow_model
 import uflow_utils
 
@@ -96,6 +97,7 @@ class UFlow(torch.nn.Module):
         channel_multiplier=channel_multiplier,
         pyramid_resolution='half',
         use_bfloat16=use_bfloat16)
+
     self._flow_model = uflow_model.PWCFlow(
         dropout_rate=dropout_rate,
         normalize_before_cost_volume=normalize_before_cost_volume,
@@ -106,6 +108,8 @@ class UFlow(torch.nn.Module):
         accumulate_flow=accumulate_flow,
         use_bfloat16=use_bfloat16,
         shared_flow_decoder=shared_flow_decoder)
+
+
     # By default, the teacher flow and featuure models are the same as
     # the student flow and feature models.
     self._teacher_flow_model = self._flow_model
@@ -328,6 +332,7 @@ class UFlow(torch.nn.Module):
                 images_without_photo_aug=None,
                 occ_active=None):
     """Perform single gradient step."""
+    uflow_flags.step += 1
     if weights is None:
       weights = {
           'smooth2': 2.0,
@@ -444,7 +449,7 @@ class UFlow(torch.nn.Module):
       log[key] = torch.mean(log[key])
       if self.summary_dir:
           ###sort the step issue
-          self.writer.add_scalar(key, log[key], step=step)
+          self.writer.add_scalar(key, log[key], step=uflow_flags.step)
 
     if progress_bar:
       sys.stdout.write('\n')
