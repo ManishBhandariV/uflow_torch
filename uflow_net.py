@@ -7,6 +7,7 @@ from torch.utils.tensorboard import SummaryWriter
 import uflow_flags
 import uflow_model
 import uflow_utils
+import numpy as np
 
 class UFlow(torch.nn.Module):
   """Simple interface with infer and train methods."""
@@ -120,8 +121,8 @@ class UFlow(torch.nn.Module):
     self._make_or_reset_optimizer(parameters = list(self._feature_model.parameters()) + list(self._flow_model.parameters()))
 
     # Set up checkpointing.
-    self._make_or_reset_checkpoint()
-    self.update_checkpoint_dir(checkpoint_dir)
+    # self._make_or_reset_checkpoint()
+    # self.update_checkpoint_dir(checkpoint_dir)
 
     # Set up tensorboard log files.
     self.summary_dir = summary_dir
@@ -435,9 +436,12 @@ class UFlow(torch.nn.Module):
       # Log losses and times.
       for key in log_update:
         if key in log:
-          log[key].append(log_update[key])
+          if torch.is_tensor(log_update[key]): log[key].append(log_update[key].item())
+          else: log[key].append(log_update[key])
+
         else:
-          log[key] = [log_update[key]]
+          if torch.is_tensor(log_update[key]): log[key] = [log_update[key].item()]
+          else: log[key] = [log_update[key]]
         # if self.summary_dir:
         #   #step = tf.compat.v1.train.get_or_create_global_step()
         #   tf.summary.scalar(key, tf.squeeze(log[key][-1]),step=step)
@@ -446,9 +450,10 @@ class UFlow(torch.nn.Module):
       start_time_data = time.time()
 
     for key in log:
-      log[key] = torch.mean(log[key])
+
+      log[key] = np.mean(log[key])
       if self.summary_dir:
-          ###sort the step issue
+
           self.writer.add_scalar(key, log[key], step=uflow_flags.step)
 
     if progress_bar:

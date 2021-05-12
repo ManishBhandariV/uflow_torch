@@ -56,11 +56,14 @@ def mask_invalid(coords):
   max_height = float(coords.shape[-3] - 1)
   max_width = float(coords.shape[-2] - 1)
   mask = torch.logical_and(
-      torch.logical_and(coords[:, :, :, 0] >= 0.0,
-                     coords[:, :, :, 0] <= max_height),
-      torch.logical_and(coords[:, :, :, 1] >= 0.0,
-                     coords[:, :, :, 1] <= max_width))
-  mask = mask.type(torch.float32)[:, :, :, None]
+      torch.logical_and(coords[:, 0, :, :] >= 0.0,
+                     coords[:, 0, :, :] <= max_height),
+      torch.logical_and(coords[:, 1, :, :] >= 0.0,
+                     coords[:, 1, :, :] <= max_width))
+
+  mask = torch.unsqueeze(mask,1).type(torch.float32)
+
+
   return mask
 
 def resample(source, coords):
@@ -251,6 +254,9 @@ def compute_warps_and_occlusion(flows,
                                 occ_active=None):
   """Compute warps, valid warp masks, advection maps, and occlusion masks."""
 
+
+
+
   if occ_clip_max is not None:
     for key in occ_clip_max:
       if key not in ['forward_collision', 'fb_abs']:
@@ -284,9 +290,14 @@ def compute_warps_and_occlusion(flows,
       flow_ij = flows[key][level]
       flow_ji = flows[rev_key][level]
 
+
       # Compute warps (coordinates) and a mask for which coordinates are valid.
+
+
+
       warps[key].append(flow_to_warp(flow_ij))
       valid_warp_masks[key].append(mask_invalid(warps[key][level]))
+
 
       # Compare forward and backward flow.
       flow_ji_in_i = resample(flow_ji, warps[key][level])
@@ -596,12 +607,10 @@ def resize(img, height, width, is_flow, mask=None):
 
 def random_subseq(sequence, subseq_len):
   """Select a random subsequence of a given length."""
-  seq_len = tf.shape(input=sequence)[0]
-  start_index = tf.random.uniform([],
-                                  minval=0,
-                                  maxval=seq_len - subseq_len + 1,
-                                  dtype=tf.int32)
+  seq_len = sequence.shape[0]
+  start_index = torch.randint(size= [], low= 0, high= seq_len - subseq_len + 1)
   subseq = sequence[start_index:start_index + subseq_len]
+
   return subseq
 
 
@@ -712,6 +721,7 @@ def compute_loss(
       if stop_gradient_mask:
         mask_level0 = not_occluded_masks[key][0] *  valid_warp_masks[key][0]
         mask_level0.requires_grad = False
+
       else:
         mask_level0 = not_occluded_masks[key][0] * valid_warp_masks[key][0]
     else:
@@ -731,6 +741,8 @@ def compute_loss(
       losses['photo'] += (
           weights['photo'] * (mask_level0 * error).sum() /
           (mask_level0.sum() + 1e-16) / num_pairs)
+
+      losses['photo'].requires_grad = True
 
     if 'smooth2' in weights or 'smooth1' in weights:
 
@@ -770,6 +782,7 @@ def compute_loss(
             ((weights_x * robust_l1(flow_gx)).sum() +
              (weights_y * robust_l1(flow_gy)).sum()) / 2. /
             num_pairs)
+        losses['smooth1'].requires_grad = True
 
         if plot_dir is not None:
           uflow_plotting.plot_smoothness(key, images, weights_x, weights_y,
@@ -795,6 +808,7 @@ def compute_loss(
             ((weights_xx * robust_l1(flow_gxx)).mean() +
              (weights_yy * robust_l1(flow_gyy)).mean()) /
             2. / num_pairs)
+        losses['smooth2'].requires_grad = True
 
         if plot_dir is not None:
           uflow_plotting.plot_smoothness(key, images, weights_xx, weights_yy,
@@ -808,6 +822,7 @@ def compute_loss(
       losses['ssim'] += weights['ssim'] * (
           (ssim_error * avg_weight).sum() /
           ((avg_weight).sum() + 1e-16) / num_pairs)
+      losses['ssim'].requires_grad = True
 
     if 'census' in weights:
       losses['census'] += weights['census'] * census_loss(
@@ -815,6 +830,7 @@ def compute_loss(
           warped_images[key],
           mask_level0,
           distance_metric_fn=distance_metric_fns['census']) / num_pairs
+      losses['census'].requires_grad = True
 
     if 'selfsup' in weights:
       assert selfsup_transform_fns is not None
@@ -862,6 +878,8 @@ def compute_loss(
       losses['selfsup'] += (
           weights['selfsup'] * (mask * error).sum() /
           ((torch.ones_like(mask)).sum() + 1e-16) / num_pairs)
+
+      losses['selfsup'].requires_grad = True
       if plot_dir is not None:
         uflow_plotting.plot_selfsup(key, images, flows, teacher_flow,
                                     student_flow, error, teacher_mask,
@@ -869,6 +887,10 @@ def compute_loss(
                                     plot_dir)
 
   losses['total'] = sum(losses.values())
+  losses['total'].requires_grad = True
+
+
+
 
   return losses
 
@@ -959,11 +981,18 @@ def compute_features_and_flow(
     i, image_version = key
     # if perform_selfsup and image_version == 'original':
     if perform_selfsup and image_version == teacher_image_version:
+      teacher_feature_model.eval()
       features[(i, 'original-teacher')] = teacher_feature_model(
-          image, split_features_by_sample=False, training=False)
+          image, split_features_by_sample=False)
 
-    features[(i, image_version + '-student')] = feature_model(
-        image, split_features_by_sample=False, training=training)
+    if training:
+      features[(i, image_version + '-student')] = feature_model(
+        image, split_features_by_sample=False)
+    else:
+        feature_model.eval()
+        features[(i, image_version + '-student')] = feature_model(
+          image, split_features_by_sample=False)
+
 
   # Only use original images and features computed on those for computing
   # photometric losses down the road.
@@ -1171,10 +1200,10 @@ def randomly_shift_features(feature_pyramid,
 def zero_mask_border(mask_bhw3, patch_size):
   """Used to ignore border effects from census_transform."""
   mask_padding = patch_size // 2
-  mask = mask_bhw3[:, mask_padding:-mask_padding, mask_padding:-mask_padding, :]
+  mask = mask_bhw3[:,:, mask_padding:-mask_padding, mask_padding:-mask_padding]
 
-  return torch.nn.functional.pad(mask, (0, 0, mask_padding, mask_padding,
-                mask_padding, mask_padding, 0, 0), mode='constant', value=0)
+  return torch.nn.functional.pad(mask, ( mask_padding, mask_padding,
+                mask_padding, mask_padding), mode='constant', value=0)
 
 
 
@@ -1189,17 +1218,19 @@ def census_transform(image, patch_size):
   Returns:
     image with census transform applied
   """
-  rgb_weights = torch.tensor([0.2989, 0.5870, 0.1140])
-  intensities = torch.unsqueeze(torch.tensordot(image,rgb_weights,([-1],[-1])),-1) * 255
-  kernel = torch.reshape(
-      torch.eye(patch_size * patch_size),
-      (patch_size, patch_size, 1, patch_size * patch_size))
 
-  intensities = torch.moveaxis(intensities,-1,1)
-  kernel = torch.moveaxis(kernel,-1,1)
-  neighbors = F.conv2d(input=torch.moveaxis(intensities, -1, 1), weight=torch.moveaxis(kernel, [-1, -2], [0, 1]),
+  rgb_weights = torch.tensor([0.2989, 0.5870, 0.1140])
+  intensities = image[:, 0, Ellipsis] * rgb_weights[0] + image[:, 1, Ellipsis] * rgb_weights[1] + image[:, 2, Ellipsis] * rgb_weights[2]
+  intensities = torch.unsqueeze(intensities, 1) * 255
+  kernel = torch.reshape(
+    torch.eye(patch_size * patch_size),
+    (patch_size * patch_size, 1, patch_size, patch_size))
+
+  # intensities = torch.moveaxis(intensities,-1,1)
+  # kernel = torch.moveaxis(kernel,-1,1)
+  neighbors = F.conv2d(input= intensities, weight= kernel,
                        padding=(int((patch_size - 1) / 2), int((patch_size - 1) / 2)))
-  neighbors = torch.moveaxis(neighbors, 1, -1)
+  # neighbors = torch.moveaxis(neighbors, 1, -1)
 
   diff = neighbors - intensities
   # Coefficients adopted from DDFlow.
@@ -1222,7 +1253,7 @@ def soft_hamming(a_bhwk, b_bhwk, thresh=.1):
   """
   sq_dist_bhwk = torch.square(a_bhwk - b_bhwk)
   soft_thresh_dist_bhwk = sq_dist_bhwk / (thresh + sq_dist_bhwk)
-  return soft_thresh_dist_bhwk.sum(dim = 3, keepdim = True)
+  return soft_thresh_dist_bhwk.sum(dim = 1, keepdim = True)
 
 
 
@@ -1246,43 +1277,6 @@ def census_loss(image_a_bhw3,
   loss_mean = diff_sum / (( padded_mask_bhw3 + 1e-6).sum())
 
   return loss_mean
-
-
-def time_it(f, num_reps=1, execute_once_before=False):
-  """Times a tensorflow function in eager mode.
-
-  Args:
-    f: function with no arguments that should be timed.
-    num_reps: int, number of repetitions for timing.
-    execute_once_before: boolean, whether to execute the function once before
-      timing in order to not count the tf.function compile time.
-
-  Returns:
-    tuple of the average time in ms and the functions output.
-  """
-  assert num_reps >= 1
-  # Execute f once before timing it to allow tf.function to compile the graph.
-  if execute_once_before:
-    x = f()
-  # Make sure that there is nothing still running on the GPU by waiting for the
-  # completion of a bogus command.
-  _ = torch.square(tf.random.uniform([1])).numpy()
-  # Time f for a number of repetitions.
-  start_in_s = time.time()
-  for _ in range(num_reps):
-    x = f()
-    # Make sure that f has finished and was not just enqueued by using another
-    # bogus command. This will overestimate the computing time of f by waiting
-    # until the result has been copied to main memory. Calling reduce_sum
-    # reduces that overestimation.
-    if isinstance(x, tuple) or isinstance(x, list):
-      _ = [tf.reduce_sum(input_tensor=xi).numpy() for xi in x]
-    else:
-      _ = tf.reduce_sum(input_tensor=x).numpy()
-  end_in_s = time.time()
-  # Compute the average time in ms.
-  avg_time = (end_in_s - start_in_s) * 1000. / float(num_reps)
-  return avg_time, x
 
 
 def _avg_pool3x3(x):

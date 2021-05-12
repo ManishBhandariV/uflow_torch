@@ -1,9 +1,69 @@
 from functools import partial
-# import uflow_augmentation
-# from data import generic_flow_dataset as flow_dataset
-from data import kitti
-# from data import sintel
+import torch
 from torch.utils import data
+
+from data import kitti
+import uflow_augmentation
+
+
+class MapDataset(torch.utils.data.Dataset):
+    """
+    Given a dataset, creates a dataset which applies a mapping function
+    to its items (lazily, only when an item is called).
+
+    Note that data is not cloned/copied from the initial dataset.
+    """
+
+    def __init__(self, dataset, augmention_function = None,  include_ground_truth = False, apply_augmentation = True, include_occlusions = False ):
+        self.dataset = dataset
+        self.map = self._ensure_shapes
+        self.include_gt = include_ground_truth
+        self.apply_aug = apply_augmentation
+        self.include_occ = include_occlusions
+        self.augmentation_func = augmention_function
+
+
+    def __getitem__(self, index):
+        if self.apply_aug:
+            x1, x2 = self.augmentation_func(self.dataset[index])
+
+        x1, x2 = self.map(x1,x2)
+
+        return x1, x2
+
+    def __len__(self):
+        return len(self.dataset)
+
+    def _ensure_shapes(self, imgs, imgs_na=None, flow=None, valid=None, occ=None ):
+    #change the defination for all the cases so that we have a proper mapping and also include assert shape
+        # different cases of data combinations
+        if self.include_gt and self.apply_aug:
+            return (imgs, {
+                'images_without_photo_aug': imgs_na,
+                'flow_uv': flow,
+                'flow_valid': valid})
+
+
+        elif self.include_gt and self.include_occ:
+            return (imgs, {
+                'flow_uv': flow,
+                'flow_valid': valid,
+                'occlusions': occ})
+
+        elif self.include_gt:
+            return (imgs, {
+                'flow_uv': flow,
+                'flow_valid': valid})
+
+        elif self.include_occ:
+            return (imgs, {
+                'occlusions': occ})
+
+        elif self.apply_aug:
+            return (imgs, {'images_without_photo_aug': imgs_na})
+
+        else:
+            return (imgs, {})
 
 
 def make_train_iterator(
@@ -85,80 +145,25 @@ def make_train_iterator(
           resize_gt_flow=resize_gt_flow,
           seed=seed,
       )
-    elif 'chairs' in data_format:
-      dataset = flow_dataset.make_dataset(
-          path,
-          mode=mode,
-          seq_len=seq_len,
-          shuffle_buffer_size=shuffle_buffer_size,
-          height=None if crop_instead_of_resize else height,
-          width=None if crop_instead_of_resize else width,
-          resize_gt_flow=resize_gt_flow,
-          gt_flow_shape=[384, 512, 2],
-          seed=seed,
-      )
-    elif 'sintel' in data_format:
-      dataset = sintel.make_dataset(
-          path,
-          mode=mode,
-          seq_len=seq_len,
-          shuffle_buffer_size=shuffle_buffer_size,
-          height=None if crop_instead_of_resize else height,
-          width=None if crop_instead_of_resize else width,
-          resize_gt_flow=resize_gt_flow,
-          seed=seed,
-      )
     else:
       print('Unknown data format "{}"'.format(data_format))
       continue
+
     train_datasets.append(dataset)
 
   # prepare augmentation function
   # in case no crop is desired set it to the size images have been resized to
   # This will fail if none or both are specified.
-  # augmentation_fn = partial(
-  #     uflow_augmentation.apply_augmentation,
-  #     crop_height=height,
-  #     crop_width=width)
+  augmentation_fn = partial(
+      uflow_augmentation.apply_augmentation,
+      crop_height=height,
+      crop_width=width)
 
-  # returns a function to apply ensure_shape on all the available data
-  def _ensure_shapes():
-
-    # different cases of data combinations
-    if include_ground_truth and apply_augmentation:
-      return lambda imgs, imgs_na, flow, valid: (imgs, {
-              'images_without_photo_aug': imgs_na,
-              'flow_uv': flow,
-              'flow_valid': valid})
-    elif include_ground_truth and include_occlusions:
-      return lambda imgs, flow, valid, occ: (imgs, {
-              'flow_uv': flow,
-              'flow_valid': valid,
-              'occlusions': occ })
-    elif include_ground_truth:
-      return lambda imgs, flow, valid: (imgs, {
-          'flow_uv': flow,
-          'flow_valid': valid })
-    elif include_occlusions:
-      return lambda imgs, occ: (imgs, {
-          'occlusions': occ })
-    elif apply_augmentation:
-      return lambda imgs, imgs_na: (imgs, {'images_without_photo_aug': imgs_na})
-    else:
-      return lambda imgs: (imgs, {})
   # Perform data augmentation
   # This cannot handle occlusions at the moment.
   train_ds = train_datasets[0]
-  # if apply_augmentation:
-  #   train_ds = train_ds.map(augmentation_fn)
-  train_ds = train_ds.map(_ensure_shapes())
+  train_ds = MapDataset(train_ds, augmentation_fn, apply_augmentation= apply_augmentation)
   train_it = data.DataLoader(train_ds , batch_size=batch_size)
-
-
-  # train_ds = train_ds.batch(batch_size)
-  # train_ds = train_ds.prefetch(1)
-  # train_ds = train_ds.map(_ensure_shapes())
-  # train_it = tf.compat.v1.data.make_one_shot_iterator(train_ds)
 
   return train_it
 

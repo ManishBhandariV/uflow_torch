@@ -341,4 +341,4 @@ def main(unused_argv):
 if __name__ == '__main__':
   app.run(main)
 
-
+# --train_on="kitti:datasets/home/manish/winshare/datasets/data_scene_flow_multiview"
