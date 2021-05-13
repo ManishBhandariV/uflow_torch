@@ -3,11 +3,14 @@ import sys
 import time
 import torch
 from torch.utils.tensorboard import SummaryWriter
+from absl import flags
 
 import uflow_flags
 import uflow_model
 import uflow_utils
 import numpy as np
+
+FLAGS = flags.FLAGS
 
 class UFlow(torch.nn.Module):
   """Simple interface with infer and train methods."""
@@ -125,6 +128,7 @@ class UFlow(torch.nn.Module):
     # self.update_checkpoint_dir(checkpoint_dir)
 
     # Set up tensorboard log files.
+    self.checkpoint_dir = checkpoint_dir
     self.summary_dir = summary_dir
     if self.summary_dir:
       # self.writer = tf.compat.v1.summary.create_file_writer(summary_dir)
@@ -163,7 +167,17 @@ class UFlow(torch.nn.Module):
   def flow_model(self):
     return self._flow_model
 
-  ####see how to save checkpoints and restore checkpoints fpr pytorch
+  def restore(self, steps):
+      uflow_flags.step = steps*FLAGS.epoch_length
+
+  # def save(self):
+  #   """Saves a model checkpoint."""
+  #   torch.save({
+  #   "epoch": uflow_flags.step // FLAGS.epoch_length,
+  #   "optimizer" :self._optimizer.state_dict(),
+  #   "feature_model_state_dict" : self._feature_model.state_dict(),
+  #   "flow_model_state_dict" :self._flow_model.state_dict(),
+  #   }, self.checkpoint_dir + "/" + self.checkpoint_dir + " .pth")
 
   def _make_or_reset_optimizer(self, parameters):
     if self._optimizer_type == 'adam':
@@ -454,7 +468,7 @@ class UFlow(torch.nn.Module):
       log[key] = np.mean(log[key])
       if self.summary_dir:
 
-          self.writer.add_scalar(key, log[key], step=uflow_flags.step)
+          self.writer.add_scalar(key, log[key], uflow_flags.step // FLAGS.epoch_length)
 
     if progress_bar:
       sys.stdout.write('\n')

@@ -5,6 +5,7 @@ from absl import app
 from absl import flags
 
 import numpy as np
+import os
 # import tensorflow as tf
 import torch
 # import uflow_augmentation
@@ -145,14 +146,15 @@ def main(unused_argv):
 
   # gin.parse_config_files_and_bindings(FLAGS.config_file, FLAGS.gin_bindings)
   # # Make directories if they do not exist yet.
-  # if FLAGS.checkpoint_dir and not tf.io.gfile.exists(FLAGS.checkpoint_dir):
-  #   print('Making new checkpoint directory', FLAGS.checkpoint_dir)
-  #   tf.io.gfile.makedirs(FLAGS.checkpoint_dir)
-  # if FLAGS.plot_dir and not tf.io.gfile.exists(FLAGS.plot_dir):
-  #   print('Making new plot directory', FLAGS.plot_dir)
-  #   tf.io.gfile.makedirs(FLAGS.plot_dir)
+  if FLAGS.checkpoint_dir and not os.path.exists(FLAGS.checkpoint_dir):
+    print('Making new checkpoint directory', FLAGS.checkpoint_dir)
+    os.makedirs(FLAGS.checkpoint_dir)
+  if FLAGS.plot_dir and not os.path.exists(FLAGS.plot_dir):
+    print('Making new plot directory', FLAGS.plot_dir)
+    os.makedirs(FLAGS.plot_dir)
 
   uflow = create_uflow()
+
 
   if not FLAGS.from_scratch:
     # First restore from init_checkpoint_dir, which is only restored from but
@@ -168,8 +170,16 @@ def main(unused_argv):
       uflow.update_checkpoint_dir(FLAGS.checkpoint_dir)
 
     if FLAGS.checkpoint_dir:
-      print('Restoring model from checkpoint {}.'.format(FLAGS.checkpoint_dir))
-      uflow.restore()
+      print('Restoring model from checkpoint {}.'.format(os.path.join(FLAGS.checkpoint_dir,_) for _ in os.listdir(FLAGS.checkpoint_dir) if _.endswith(".pth")))
+      if len(os.listdir(FLAGS.checkpoint_dir)) == 0:
+          print('Checkpoint directory is empty, nothing is restored')
+      else:
+          checkpoints_list = [os.path.join(FLAGS.checkpoint_dir, _) for _ in os.listdir(FLAGS.checkpoint_dir) if _.endswith(".pth")]
+          checkpoints = torch.load(checkpoints_list[-1])
+          uflow.load_state_dict(checkpoints["model_state_dict"])
+          uflow._optimizer.load_state_dict(checkpoints["optimizer"])
+          uflow.restore(steps= checkpoints["epoch"])
+
   else:
     print('Starting from scratch.')
 
@@ -315,7 +325,14 @@ def main(unused_argv):
 
       if FLAGS.checkpoint_dir and not FLAGS.no_checkpointing:
 
-        uflow.save()
+
+        """Saves a model checkpoint."""
+        torch.save({
+            "epoch": uflow_flags.step // FLAGS.epoch_length,
+            "optimizer": uflow._optimizer.state_dict(),
+            "model_state_dict": uflow.state_dict(),
+        }, FLAGS.checkpoint_dir + "/" + FLAGS.checkpoint_dir + " .pth")
+
 
       # Print losses from last epoch.
       # uflow_plotting.print_log(log, epoch)

@@ -63,7 +63,7 @@ flags.DEFINE_bool('from_scratch', False,
                   'Train from scratch. Do not restore the last checkpoint.')
 flags.DEFINE_bool('no_checkpointing', False,
                   'Do not save model checkpoints during training.')
-flags.DEFINE_integer('epoch_length', 1000,
+flags.DEFINE_integer('epoch_length', 3,
                      'Number of gradient steps per epoch.')
 flags.DEFINE_integer('num_train_steps', int(1e6),
                      'Number of gradient steps to train for.')
