@@ -73,6 +73,7 @@ def make_train_iterator(
     shuffle_buffer_size,
     batch_size,
     seq_len,
+    entire_seq = False,
     crop_instead_of_resize=False,
     apply_augmentation=True,
     include_ground_truth=False,
@@ -143,6 +144,7 @@ def make_train_iterator(
           height=None if crop_instead_of_resize else height,
           width=None if crop_instead_of_resize else width,
           resize_gt_flow=resize_gt_flow,
+          entire_seq= entire_seq,
           seed=seed,
       )
     else:

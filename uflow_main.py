@@ -14,6 +14,7 @@ import uflow_flags
 import uflow_net
 # import uflow_plotting
 from uflow_net import UFlow
+import uflow_gpu_utils
 
 FLAGS = flags.FLAGS
 
@@ -143,6 +144,7 @@ def create_frozen_teacher_models(uflow):
   return teacher_feature_model, teacher_flow_model
 
 def main(unused_argv):
+  uflow_gpu_utils.setup_gpu()
 
   # gin.parse_config_files_and_bindings(FLAGS.config_file, FLAGS.gin_bindings)
   # # Make directories if they do not exist yet.
@@ -153,7 +155,7 @@ def main(unused_argv):
     print('Making new plot directory', FLAGS.plot_dir)
     os.makedirs(FLAGS.plot_dir)
 
-  uflow = create_uflow()
+  uflow = create_uflow().to(uflow_gpu_utils.device)
 
 
   if not FLAGS.from_scratch:
@@ -203,11 +205,13 @@ def main(unused_argv):
         FLAGS.shuffle_buffer_size,
         FLAGS.batch_size,
         FLAGS.seq_len,
+        FLAGS.entire_sequence_for_kitti,
         crop_instead_of_resize=FLAGS.crop_instead_of_resize,
         apply_augmentation=True,
         include_ground_truth=FLAGS.use_supervision,
         resize_gt_flow=FLAGS.resize_gt_flow_supervision,
         include_occlusions=FLAGS.use_gt_occlusions,
+
     )
     if FLAGS.use_supervision:
       # Since this is the only loss in this setting, and the Adam optimizer
@@ -316,6 +320,7 @@ def main(unused_argv):
           plot_dir=FLAGS.plot_dir if FLAGS.plot_debug_info else None,
           distance_metrics=distance_metrics,
           occ_active=occ_active)
+      # print(uflow.state_dict())
 
       for key in log_update:
         if key in log:

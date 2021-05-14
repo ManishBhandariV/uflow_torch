@@ -418,6 +418,7 @@ class UFlow(torch.nn.Module):
 
       # Split batch into images, occlusion masks, and ground truth flow.
       images, labels = batch
+      # print(images.shape)
 
 
       ground_truth_flow = labels.get('flow_uv', None)
@@ -469,7 +470,7 @@ class UFlow(torch.nn.Module):
       if self.summary_dir:
 
           self.writer.add_scalar(key, log[key], uflow_flags.step // FLAGS.epoch_length)
-
+    print(log)
     if progress_bar:
       sys.stdout.write('\n')
       sys.stdout.flush()

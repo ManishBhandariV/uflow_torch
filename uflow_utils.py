@@ -4,6 +4,7 @@ import  torch.nn.functional as F
 import time
 
 import uflow_resampler
+import uflow_gpu_utils
 
 # from uflow import uflow_plotting
 # from uflow.uflow_resampler import resampler
@@ -26,7 +27,7 @@ def flow_to_warp(flow):
       torch.linspace(0.0,height - 1.0, steps= int(height)),
       torch.linspace(0.0,width - 1.0, steps= int(width)))
 
-  grid = torch.stack((i_grid,j_grid), dim= 0)
+  grid = torch.stack((i_grid,j_grid), dim= 0).to(uflow_gpu_utils.device)
 
   # Potentially add batch dimension to match the shape of flow.
   if len(flow.shape) == 4:
@@ -53,8 +54,8 @@ def mask_invalid(coords):
   coords_rank = len(coords.shape)
   if coords_rank != 4:
     raise NotImplementedError()
-  max_height = float(coords.shape[-3] - 1)
-  max_width = float(coords.shape[-2] - 1)
+  max_height = float(coords.shape[-2] - 1)
+  max_width = float(coords.shape[-1] - 1)
   mask = torch.logical_and(
       torch.logical_and(coords[:, 0, :, :] >= 0.0,
                      coords[:, 0, :, :] <= max_height),
@@ -188,7 +189,7 @@ def compute_range_map(flow,
   batch_range = torch.reshape(torch.arange(batch_size), [batch_size, 1, 1])
   idx_batch_offset = torch.tile(
       batch_range, [1, flow_height, flow_width]) * output_height * output_width
-
+  idx_batch_offset = idx_batch_offset.to(uflow_gpu_utils.device)
   # Flatten everything.
 
   coords_floor_flattened = torch.reshape(torch.squeeze(coords_floor,0), [2, -1])
@@ -232,7 +233,7 @@ def compute_range_map(flow,
   weights = torch.cat(weights_list, dim=0)
 
   # Sum up weights for each pixel and reshape the result.
-  counts = torch.zeros(batch_size * output_height * output_width).scatter_add(0, idxs, weights)
+  counts = torch.zeros(batch_size * output_height * output_width).to(uflow_gpu_utils.device).scatter_add(0, idxs, weights)
   count_image = torch.reshape(counts, [batch_size, 1, output_height, output_width])
 
   if downsampling_factor > 1:
@@ -719,7 +720,7 @@ def compute_loss(
 
     if ground_truth_occlusions is None:
       if stop_gradient_mask:
-        mask_level0 = not_occluded_masks[key][0] *  valid_warp_masks[key][0]
+        mask_level0 = not_occluded_masks[key][0] * valid_warp_masks[key][0]
         mask_level0.requires_grad = False
 
       else:
@@ -1224,7 +1225,7 @@ def census_transform(image, patch_size):
   intensities = torch.unsqueeze(intensities, 1) * 255
   kernel = torch.reshape(
     torch.eye(patch_size * patch_size),
-    (patch_size * patch_size, 1, patch_size, patch_size))
+    (patch_size * patch_size, 1, patch_size, patch_size)).to(uflow_gpu_utils.device)
 
   # intensities = torch.moveaxis(intensities,-1,1)
   # kernel = torch.moveaxis(kernel,-1,1)

@@ -63,7 +63,7 @@ flags.DEFINE_bool('from_scratch', False,
                   'Train from scratch. Do not restore the last checkpoint.')
 flags.DEFINE_bool('no_checkpointing', False,
                   'Do not save model checkpoints during training.')
-flags.DEFINE_integer('epoch_length', 3,
+flags.DEFINE_integer('epoch_length', 1000,
                      'Number of gradient steps per epoch.')
 flags.DEFINE_integer('num_train_steps', int(1e6),
                      'Number of gradient steps to train for.')
@@ -81,6 +81,7 @@ flags.DEFINE_integer('width', 640, 'Image height for training and evaluation.')
 flags.DEFINE_bool('crop_instead_of_resize', False, 'Crops images for training '
                   'instead of resizing the images.')
 flags.DEFINE_integer('seq_len', 2, 'Sequence length for training flow.')
+flags.DEFINE_bool('entire_sequence_for_kitti', False, "to use the entire sequence for training or leave out frames 9 to 13")
 flags.DEFINE_integer('batch_size', 1, 'Batch size for training flow on '
                      'gpu.')
 flags.DEFINE_string('optimizer', 'adam', 'One of "adam", "sgd"')
@@ -195,3 +196,8 @@ flags.DEFINE_multi_string(
     'gin_bindings', None,
     'Newline separated list of Gin parameter bindings. Can be specified '
     'multiple times. Overrides config from --config_file.')
+
+##gpu
+
+flags.DEFINE_string('device', 'auto',
+                    'Device to use, i.e. "cpu" or "cuda:0", or "auto" to automatically select best GPU')
