@@ -4,6 +4,7 @@ import time
 import torch
 from torch.utils.tensorboard import SummaryWriter
 from absl import flags
+from torch import autograd
 
 import uflow_flags
 import uflow_model
@@ -102,6 +103,7 @@ class UFlow(torch.nn.Module):
         pyramid_resolution='half',
         use_bfloat16=use_bfloat16)
 
+
     self._flow_model = uflow_model.PWCFlow(
         dropout_rate=dropout_rate,
         normalize_before_cost_volume=normalize_before_cost_volume,
@@ -121,7 +123,8 @@ class UFlow(torch.nn.Module):
 
     self._learning_rate = learning_rate
     self._optimizer_type = optimizer
-    self._make_or_reset_optimizer(parameters = list(self._feature_model.parameters()) + list(self._flow_model.parameters()))
+
+    self._make_or_reset_optimizer()
 
     # Set up checkpointing.
     # self._make_or_reset_checkpoint()
@@ -157,6 +160,8 @@ class UFlow(torch.nn.Module):
         occ_clip_max = {'fb_abs': 10.0, 'forward_collision': 5.0}
     self._occ_clip_max = occ_clip_max
 
+    # print("init",list(self.parameters())[0])
+
   def set_teacher_models(self, teacher_feature_model, teacher_flow_model):
       self._teacher_feature_model = teacher_feature_model
       self._teacher_flow_model = teacher_flow_model
@@ -179,11 +184,11 @@ class UFlow(torch.nn.Module):
   #   "flow_model_state_dict" :self._flow_model.state_dict(),
   #   }, self.checkpoint_dir + "/" + self.checkpoint_dir + " .pth")
 
-  def _make_or_reset_optimizer(self, parameters):
+  def _make_or_reset_optimizer(self):
     if self._optimizer_type == 'adam':
-      self._optimizer = torch.optim.Adam(params= parameters, lr= self._learning_rate)
+      self._optimizer = torch.optim.Adam(params= self.parameters(), lr= self._learning_rate)
     elif self._optimizer_type == 'sgd':
-      self._optimizer = torch.optim.SGD(params= parameters, lr = self._learning_rate)
+      self._optimizer = torch.optim.SGD(params= self.parameters(), lr = self._learning_rate)
     else:
       raise ValueError('Optimizer "{}" not yet implemented.'.format(
           self._optimizer_type))
@@ -214,7 +219,7 @@ class UFlow(torch.nn.Module):
       Optical flow for each pixel in image1 pointing to image2.
     """
 
-    results = self.batch_infer_no_tf_function(
+    results = self.batch_infer(
         torch.stack([image1, image2])[None],
         input_height=input_height,
         input_width=input_width,
@@ -358,7 +363,7 @@ class UFlow(torch.nn.Module):
       # Support values and callables (e.g. to compute weights from global step).
       weights = {k: v() if callable(v) else v for k, v in weights.items()}
 
-    self._optimizer.zero_grad()
+    # self._optimizer.zero_grad()
 
     losses = self._loss_and_grad(
         batch,
@@ -371,12 +376,12 @@ class UFlow(torch.nn.Module):
         images_without_photo_aug=images_without_photo_aug,
         occ_active=occ_active)
 
-    losses['total-loss'].backward()
-    self._optimizer.step()
+    # losses['total-loss'].backward()
+    # self._optimizer.step()
 
     return losses
 
-  def train(self,
+  def trainer(self,
             data_it,
             num_steps,
             weights=None,
@@ -410,6 +415,7 @@ class UFlow(torch.nn.Module):
 
     start_time_data = time.time()
     for _, batch in zip(range(num_steps), data_it):
+     # with autograd.detect_anomaly():
       stop_time_data = time.time()
 
       if progress_bar:
@@ -417,6 +423,7 @@ class UFlow(torch.nn.Module):
         sys.stdout.flush()
 
       # Split batch into images, occlusion masks, and ground truth flow.
+      self._optimizer.zero_grad()
       images, labels = batch
       # print(images.shape)
 
@@ -440,6 +447,9 @@ class UFlow(torch.nn.Module):
             ground_truth_occlusions=ground_truth_occlusions,
             images_without_photo_aug=images_without_photo_aug,
             occ_active=occ_active)
+
+      losses['total-loss'].backward()
+      self._optimizer.step()
       stop_time_train_step = time.time()
 
       log_update = losses
@@ -468,9 +478,11 @@ class UFlow(torch.nn.Module):
 
       log[key] = np.mean(log[key])
       if self.summary_dir:
-
           self.writer.add_scalar(key, log[key], uflow_flags.step // FLAGS.epoch_length)
+    print("\n")
+    print("Epoch:",uflow_flags.step // FLAGS.epoch_length)
     print(log)
+
     if progress_bar:
       sys.stdout.write('\n')
       sys.stdout.flush()
@@ -510,18 +522,18 @@ class UFlow(torch.nn.Module):
       variables.
     """
 
-    with torch.no_grad():
+    # with torch.no_grad():
 
-      losses = self.compute_loss(
-          batch,
-          weights,
-          plot_dir,
-          distance_metrics=distance_metrics,
-          ground_truth_flow=ground_truth_flow,
-          ground_truth_valid=ground_truth_valid,
-          ground_truth_occlusions=ground_truth_occlusions,
-          images_without_photo_aug=images_without_photo_aug,
-          occ_active=occ_active)
+    losses = self.compute_loss(
+      batch,
+      weights,
+      plot_dir,
+      distance_metrics=distance_metrics,
+      ground_truth_flow=ground_truth_flow,
+      ground_truth_valid=ground_truth_valid,
+      ground_truth_occlusions=ground_truth_occlusions,
+      images_without_photo_aug=images_without_photo_aug,
+      occ_active=occ_active)
 
     return losses
 

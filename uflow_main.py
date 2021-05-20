@@ -6,13 +6,12 @@ from absl import flags
 
 import numpy as np
 import os
-# import tensorflow as tf
 import torch
-# import uflow_augmentation
+import uflow_augmentation
 import uflow_data
 import uflow_flags
 import uflow_net
-# import uflow_plotting
+import uflow_plotting
 from uflow_net import UFlow
 import uflow_gpu_utils
 
@@ -21,13 +20,13 @@ FLAGS = flags.FLAGS
 def create_uflow():
   """Build the uflow model."""
 
-  # build_selfsup_transformations = partial(
-  #     uflow_augmentation.build_selfsup_transformations,
-  #     crop_height=FLAGS.selfsup_crop_height,
-  #     crop_width=FLAGS.selfsup_crop_width,
-  #     max_shift_height=FLAGS.selfsup_max_shift,
-  #     max_shift_width=FLAGS.selfsup_max_shift,
-  #     resize=FLAGS.resize_selfsup)
+  build_selfsup_transformations = partial(
+      uflow_augmentation.build_selfsup_transformations,
+      crop_height=FLAGS.selfsup_crop_height,
+      crop_width=FLAGS.selfsup_crop_width,
+      max_shift_height=FLAGS.selfsup_max_shift,
+      max_shift_width=FLAGS.selfsup_max_shift,
+      resize=FLAGS.resize_selfsup)
 
   # Define learning rate schedules [none, cosine, linear, expoential].
   def learning_rate_fn():
@@ -74,7 +73,7 @@ def create_uflow():
       level1_num_filters=FLAGS.level1_num_filters,
       level1_num_1x1=FLAGS.level1_num_1x1,
       dropout_rate=FLAGS.dropout_rate,
-      build_selfsup_transformations=None,
+      build_selfsup_transformations= build_selfsup_transformations,
       fb_sigma_teacher=FLAGS.fb_sigma_teacher,
       fb_sigma_student=FLAGS.fb_sigma_student,
       train_with_supervision=FLAGS.use_supervision,
@@ -181,6 +180,7 @@ def main(unused_argv):
           uflow.load_state_dict(checkpoints["model_state_dict"])
           uflow._optimizer.load_state_dict(checkpoints["optimizer"])
           uflow.restore(steps= checkpoints["epoch"])
+          uflow.train()
 
   else:
     print('Starting from scratch.')
@@ -237,9 +237,9 @@ def main(unused_argv):
       step = uflow_flags.step % FLAGS.selfsup_step_cycle
       # Start self-supervision only after a certain number of steps.
       # Linearly increase self-supervision weight for a number of steps.
-      ramp_up_factor = torch.clamp(
+      ramp_up_factor = torch.clamp(torch.tensor(
           float(step - (FLAGS.selfsup_after_num_steps - 1)) /
-          float(max(FLAGS.selfsup_ramp_up_steps, 1)), 0., 1.)
+          float(max(FLAGS.selfsup_ramp_up_steps, 1))), 0., 1.)
       return FLAGS.weight_selfsup * ramp_up_factor
 
     distance_metrics = {
@@ -312,14 +312,9 @@ def main(unused_argv):
                 prev_flow_output=test_frozen_flow)
 
       # Train for an epoch and save the results.
-      log_update = uflow.train(
-          train_it,
-          weights=current_weights,
-          num_steps=FLAGS.epoch_length,
-          progress_bar=True,
-          plot_dir=FLAGS.plot_dir if FLAGS.plot_debug_info else None,
-          distance_metrics=distance_metrics,
-          occ_active=occ_active)
+      log_update = uflow.trainer(train_it, num_steps=FLAGS.epoch_length, weights=current_weights, progress_bar=True,
+                                  plot_dir=FLAGS.plot_dir if FLAGS.plot_debug_info else None,
+                                  distance_metrics=distance_metrics, occ_active=occ_active)
       # print(uflow.state_dict())
 
       for key in log_update:
@@ -340,12 +335,12 @@ def main(unused_argv):
 
 
       # Print losses from last epoch.
-      # uflow_plotting.print_log(log, epoch)
+      uflow_plotting.print_log(log, epoch)
 
-      # if FLAGS.eval_on and FLAGS.evaluate_during_train:
+      if FLAGS.eval_on and FLAGS.evaluate_during_train:
         # Evaluate
-        # eval_results = evaluate(uflow)
-        # uflow_plotting.print_eval(eval_results)
+        eval_results = evaluate(uflow)
+        uflow_plotting.print_eval(eval_results)
 
       if current_step >= FLAGS.num_train_steps:
         break

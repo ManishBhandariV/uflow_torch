@@ -192,46 +192,22 @@ def make_eval_function(eval_on, height, width, progress_bar, plot_dir,
   eval_functions_and_datasets = []
   eval_keys = []
   # Split strings according to pattern "format0:path0;format1:path1".
+
+
   for format_and_path in eval_on.split(';'):
     data_format, path = format_and_path.split(':')
 
     # Add a dataset based on format and path.
     if 'kitti' in data_format:
-      if 'benchmark' in data_format:
-        dataset = kitti.make_dataset(path, mode='test')
-        eval_fn = kitti.benchmark
-      else:
-        dataset = kitti.make_dataset(path, mode='eval')
-        eval_fn = partial(kitti.evaluate, prefix=data_format)
-        eval_keys += kitti.list_eval_keys(prefix=data_format)
-    elif 'chairs' in data_format or 'custom' in data_format:
-      dataset = flow_dataset.make_dataset(path, mode='eval')
-      eval_fn = partial(
-          flow_dataset.evaluate,
-          prefix=data_format,
-          max_num_evals=1000,  # We do this to avoid evaluating on 22k samples.
-          has_occlusion=False)
-      eval_keys += flow_dataset.list_eval_keys(prefix=data_format)
-    elif 'sintel' in data_format:
-      if 'benchmark' in data_format:
-        # pylint:disable=g-long-lambda
-        # pylint:disable=cell-var-from-loop
-        eval_fn = lambda uflow: sintel.benchmark(inference_fn=uflow.infer,
-                                                 height=height, width=width,
-                                                 sintel_path=path,
-                                                 plot_dir=plot_dir,
-                                                 num_plots=num_plots)
-        if len(eval_on.split(';')) != 1:
-          raise ValueError('Sintel benchmark should be done in isolation.')
-        return eval_fn, []
-      dataset = sintel.make_dataset(path, mode='eval-occlusion')
-      eval_fn = partial(sintel.evaluate, prefix=data_format)
-      eval_keys += sintel.list_eval_keys(prefix=data_format)
+      dataset = kitti.make_eval_dataset(path, mode='eval')
+      eval_fn = partial(kitti.evaluate, prefix=data_format)
+      eval_keys += kitti.list_eval_keys(prefix=data_format)
+
     else:
       print('Unknown data format "{}"'.format(data_format))
       continue
 
-    dataset = dataset.prefetch(1)
+    # dataset = dataset.prefetch(1)
     eval_functions_and_datasets.append((eval_fn, dataset))
 
   # Make an eval function that aggregates all evaluations.

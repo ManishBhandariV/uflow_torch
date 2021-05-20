@@ -1,6 +1,8 @@
 import torch
 from torchvision import transforms
 import  torch.nn.functional as F
+from collections import  defaultdict
+import numpy as np
 import time
 
 import uflow_resampler
@@ -721,7 +723,8 @@ def compute_loss(
     if ground_truth_occlusions is None:
       if stop_gradient_mask:
         mask_level0 = not_occluded_masks[key][0] * valid_warp_masks[key][0]
-        mask_level0.requires_grad = False
+        # mask_level0.requires_grad = False
+        mask_level0.detach()
 
       else:
         mask_level0 = not_occluded_masks[key][0] * valid_warp_masks[key][0]
@@ -809,7 +812,7 @@ def compute_loss(
             ((weights_xx * robust_l1(flow_gxx)).mean() +
              (weights_yy * robust_l1(flow_gyy)).mean()) /
             2. / num_pairs)
-        losses['smooth2'].requires_grad = True
+        # losses['smooth2'].requires_grad = True
 
         if plot_dir is not None:
           uflow_plotting.plot_smoothness(key, images, weights_xx, weights_yy,
@@ -831,7 +834,7 @@ def compute_loss(
           warped_images[key],
           mask_level0,
           distance_metric_fn=distance_metric_fns['census']) / num_pairs
-      losses['census'].requires_grad = True
+      # losses['census'].requires_grad = True
 
     if 'selfsup' in weights:
       assert selfsup_transform_fns is not None
@@ -888,7 +891,7 @@ def compute_loss(
                                     plot_dir)
 
   losses['total'] = sum(losses.values())
-  losses['total'].requires_grad = True
+  # losses['total'].requires_grad = True
 
 
 
@@ -1274,7 +1277,8 @@ def census_loss(image_a_bhw3,
   diff = distance_metric_fn(hamming_bhw1)
   diff *= padded_mask_bhw3
   diff_sum = diff.sum()
-  padded_mask_bhw3.requires_grad = False
+  # padded_mask_bhw3.requires_grad = False
+  padded_mask_bhw3.detach()
   loss_mean = diff_sum / (( padded_mask_bhw3 + 1e-6).sum())
 
   return loss_mean
@@ -1341,3 +1345,70 @@ def weighted_ssim(x, y, weight, c1=float('inf'), c2=9e-6, weight_epsilon=0.01):
     ssim_d = (mu_x**2 + mu_y**2 + c1) * (sigma_x + sigma_y + c2)
   result = ssim_n / ssim_d
   return torch.clamp((1 - result) / 2, 0, 1), average_pooled_weight
+
+
+def compute_f_metrics(mask_prediction, mask_gt, num_thresholds=40):
+  """Return a dictionary of the true positives, etc. for two binary masks."""
+  results = defaultdict(dict)
+  mask_prediction = mask_prediction.type(torch.float32)
+  mask_gt = mask_gt.type(torch.float32)
+  for threshold in np.linspace(0, 1, num_thresholds):
+    mask_thresh = torch.greater(mask_prediction, threshold).type(torch.float32)
+    true_pos = torch.count_nonzero(mask_thresh * mask_gt).type(torch.float32)
+    true_neg = torch.count_nonzero((mask_thresh - 1) * (mask_gt - 1))
+    false_pos = torch.count_nonzero(mask_thresh * (mask_gt - 1)).type(torch.float32)
+    false_neg = torch.count_nonzero((mask_thresh - 1) * mask_gt).type(torch.float32)
+    results[threshold]['tp'] = true_pos
+    results[threshold]['fp'] = false_pos
+    results[threshold]['fn'] = false_neg
+    results[threshold]['tn'] = true_neg
+  return results
+
+def time_it(f, num_reps=1, execute_once_before=False):
+  """Times a tensorflow function in eager mode.
+
+  Args:
+    f: function with no arguments that should be timed.
+    num_reps: int, number of repetitions for timing.
+    execute_once_before: boolean, whether to execute the function once before
+      timing in order to not count the tf.function compile time.
+
+  Returns:
+    tuple of the average time in ms and the functions output.
+  """
+  assert num_reps >= 1
+  # Execute f once before timing it to allow tf.function to compile the graph.
+  if execute_once_before:
+    x = f()
+  # Make sure that there is nothing still running on the GPU by waiting for the
+  # completion of a bogus command.
+  _ = torch.square(torch.rand([1])).numpy()
+  # Time f for a number of repetitions.
+  start_in_s = time.time()
+  for _ in range(num_reps):
+    x = f()
+    # Make sure that f has finished and was not just enqueued by using another
+    # bogus command. This will overestimate the computing time of f by waiting
+    # until the result has been copied to main memory. Calling reduce_sum
+    # reduces that overestimation.
+    if isinstance(x, tuple) or isinstance(x, list):
+      _ = [torch.sum(xi).numpy() for xi in x]
+    else:
+      _ = torch.sum(x).numpy()
+  end_in_s = time.time()
+  # Compute the average time in ms.
+  avg_time = (end_in_s - start_in_s) * 1000. / float(num_reps)
+  return avg_time, x
+
+def get_fmax_and_best_thresh(results):
+  """Select which threshold produces the best f1 score."""
+  fmax = -1.
+  best_thresh = -1.
+  for thresh, metrics in results.items():
+    precision = metrics['tp'] / (metrics['tp'] + metrics['fp'] + 1e-6)
+    recall = metrics['tp'] / (metrics['tp'] + metrics['fn'] + 1e-6)
+    f1 = 2 * precision * recall / (precision + recall + 1e-6)
+    if f1 > fmax:
+      fmax = f1
+      best_thresh = thresh
+  return fmax, best_thresh

@@ -231,9 +231,9 @@ class PWCFlow(torch.nn.Module):
         x_in = torch.cat([x_in, x_out], dim = 1)
       context = x_out
       pad_context = torch.nn.ConstantPad2d((1, 1, 1, 1), 0)
-      context = pad_context(context)
-      flow = flow_layers[-1](context)
-      context = context[:,:,1:-1,1:-1]
+      context_pad = pad_context(context)
+      flow = flow_layers[-1](context_pad)
+      # context = context[:,:,1:-1,1:-1]
 
       if (training and self._drop_out_rate):
         maybe_dropout = torch.greater(torch.rand([]), self._drop_out_rate)
