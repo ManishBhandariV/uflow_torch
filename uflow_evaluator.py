@@ -1,5 +1,3 @@
-import time
-
 from absl import app
 from absl import flags
 from absl import logging
@@ -8,6 +6,7 @@ import os
 
 import uflow_data
 import uflow_flags
+import uflow_gpu_utils
 import uflow_main
 import uflow_plotting
 
@@ -17,10 +16,10 @@ FLAGS = flags.FLAGS
 
 
 def evaluate():
-  """Eval happens on GPU or CPU, and evals each checkpoint as it appears."""
+  """Eval happens on GPU or CPU, and evals each checkpoints as it appears."""
 
 
-  uflow = uflow_main.create_uflow()
+  uflow = uflow_main.create_uflow().to(uflow_gpu_utils.device)
   evaluate_fn, _ = uflow_data.make_eval_function(
       FLAGS.eval_on,
       FLAGS.height,

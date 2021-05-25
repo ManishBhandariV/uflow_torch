@@ -37,7 +37,7 @@ flags.DEFINE_string('plot_dir', '', 'Path to directory where plots are saved.')
 flags.DEFINE_string('checkpoint_dir', '',
                     'Path to directory for saving and restoring checkpoints.')
 flags.DEFINE_string('init_checkpoint_dir', '',
-                    'Path to directory for initializing from a checkpoint.')
+                    'Path to directory for initializing from a checkpoints.')
 flags.DEFINE_bool(
     'plot_debug_info', False,
     'Flag to indicate whether to plot debug info during training.')
@@ -45,6 +45,9 @@ flags.DEFINE_bool(
     'use_tensorboard', False, 'Toggles logging to tensorboard.')
 flags.DEFINE_string(
     'tensorboard_logdir', '', 'Where to log tensorboard summaries.')
+flags.DEFINE_string(
+    'tensorboard_logdir_eval', '', 'Where to log tensorboard summaries.')
+
 flags.DEFINE_bool(
     'frozen_teacher', False, 'Whether or not to freeze the '
     'teacher model during distillation.')
@@ -60,7 +63,7 @@ flags.DEFINE_bool('evaluate_during_train', False,
                   'Whether or not to have the GPU train job perform evaluation '
                   'between epochs.')
 flags.DEFINE_bool('from_scratch', False,
-                  'Train from scratch. Do not restore the last checkpoint.')
+                  'Train from scratch. Do not restore the last checkpoints.')
 flags.DEFINE_bool('no_checkpointing', False,
                   'Do not save model checkpoints during training.')
 flags.DEFINE_integer('epoch_length', 1000,

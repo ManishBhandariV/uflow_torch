@@ -4,6 +4,7 @@ import  torch.nn.functional as F
 from collections import  defaultdict
 import numpy as np
 import time
+import  uflow_plotting
 
 import uflow_resampler
 import uflow_gpu_utils
@@ -66,7 +67,7 @@ def mask_invalid(coords):
 
   mask = torch.unsqueeze(mask,1).type(torch.float32)
 
-
+  a = torch.sum(mask)
   return mask
 
 def resample(source, coords):
@@ -295,8 +296,6 @@ def compute_warps_and_occlusion(flows,
 
 
       # Compute warps (coordinates) and a mask for which coordinates are valid.
-
-
 
       warps[key].append(flow_to_warp(flow_ij))
       valid_warp_masks[key].append(mask_invalid(warps[key][level]))
@@ -564,7 +563,7 @@ def resize(img, height, width, is_flow, mask=None):
       scaling = torch.reshape(
           torch.tensor([float(height) / orig_height,
                         float(width) / orig_width])
-          , [1, 2, 1, 1])
+          , [1, 2, 1, 1]).to(uflow_gpu_utils.device)
       img_resized *= scaling
 
     if mask is not None:
@@ -596,12 +595,12 @@ def resize(img, height, width, is_flow, mask=None):
     # defined again.
     # img_resized.set_shape(
     #     (img_resized.shape[0], height, width, img_resized.shape[3]))
-    result_img = torch.reshape(img_resized, shape[:-3] + img_resized.shape[-3:])
+    result_img = torch.reshape(img_resized, shape[:-3] + list(img_resized.shape[-3:]))
     if mask is not None:
       # mask_resized.set_shape(
       #     (mask_resized.shape[0], height, width, mask_resized.shape[3]))
       result_mask = torch.reshape(mask_resized,
-                               shape[:-3] + mask_resized.shape[-3:])
+                               shape[:-3] + list(mask_resized.shape)[-3:])
       return result_img, result_mask
     return result_img
   else:
@@ -835,6 +834,7 @@ def compute_loss(
           mask_level0,
           distance_metric_fn=distance_metric_fns['census']) / num_pairs
       # losses['census'].requires_grad = True
+      print(losses['census'])
 
     if 'selfsup' in weights:
       assert selfsup_transform_fns is not None
@@ -883,7 +883,7 @@ def compute_loss(
           weights['selfsup'] * (mask * error).sum() /
           ((torch.ones_like(mask)).sum() + 1e-16) / num_pairs)
 
-      losses['selfsup'].requires_grad = True
+      # losses['selfsup'].requires_grad = True
       if plot_dir is not None:
         uflow_plotting.plot_selfsup(key, images, flows, teacher_flow,
                                     student_flow, error, teacher_mask,
@@ -891,10 +891,6 @@ def compute_loss(
                                     plot_dir)
 
   losses['total'] = sum(losses.values())
-  # losses['total'].requires_grad = True
-
-
-
 
   return losses
 
@@ -1392,9 +1388,9 @@ def time_it(f, num_reps=1, execute_once_before=False):
     # until the result has been copied to main memory. Calling reduce_sum
     # reduces that overestimation.
     if isinstance(x, tuple) or isinstance(x, list):
-      _ = [torch.sum(xi).numpy() for xi in x]
+      _ = [torch.sum(xi) for xi in x]
     else:
-      _ = torch.sum(x).numpy()
+      _ = torch.sum(x)
   end_in_s = time.time()
   # Compute the average time in ms.
   avg_time = (end_in_s - start_in_s) * 1000. / float(num_reps)

@@ -494,3 +494,14 @@ class PWCFeaturePyramid(torch.nn.Module):
 
     return features
 
+# feat = PWCFeaturePyramid()
+# flow = PWCFlow()
+#
+# names1 = []
+# for name, _ in feat.named_parameters():
+#   names1.append(name)
+#
+# for name, _ in flow.named_parameters():
+#   names1.append(name)
+#
+# print(names1)

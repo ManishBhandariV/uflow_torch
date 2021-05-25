@@ -148,13 +148,15 @@ def main(unused_argv):
   # gin.parse_config_files_and_bindings(FLAGS.config_file, FLAGS.gin_bindings)
   # # Make directories if they do not exist yet.
   if FLAGS.checkpoint_dir and not os.path.exists(FLAGS.checkpoint_dir):
-    print('Making new checkpoint directory', FLAGS.checkpoint_dir)
+    print('Making new checkpoints directory', FLAGS.checkpoint_dir)
     os.makedirs(FLAGS.checkpoint_dir)
   if FLAGS.plot_dir and not os.path.exists(FLAGS.plot_dir):
     print('Making new plot directory', FLAGS.plot_dir)
     os.makedirs(FLAGS.plot_dir)
 
   uflow = create_uflow().to(uflow_gpu_utils.device)
+  names = []
+
 
 
   if not FLAGS.from_scratch:
@@ -162,7 +164,7 @@ def main(unused_argv):
     # not saved to, and then restore from checkpoint_dir if there is already
     # a model there (e.g. if the run was stopped and restarted).
     if FLAGS.init_checkpoint_dir:
-      print('Initializing model from checkpoint {}.'.format(
+      print('Initializing model from checkpoints {}.'.format(
           FLAGS.init_checkpoint_dir))
       uflow.update_checkpoint_dir(FLAGS.init_checkpoint_dir)
       uflow.restore(
@@ -171,7 +173,7 @@ def main(unused_argv):
       uflow.update_checkpoint_dir(FLAGS.checkpoint_dir)
 
     if FLAGS.checkpoint_dir:
-      print('Restoring model from checkpoint {}.'.format(os.path.join(FLAGS.checkpoint_dir,_) for _ in os.listdir(FLAGS.checkpoint_dir) if _.endswith(".pth")))
+      print('Restoring model from checkpoints {}.'.format(os.path.join(FLAGS.checkpoint_dir,_) for _ in os.listdir(FLAGS.checkpoint_dir) if _.endswith(".pth")))
       if len(os.listdir(FLAGS.checkpoint_dir)) == 0:
           print('Checkpoint directory is empty, nothing is restored')
       else:
@@ -234,6 +236,7 @@ def main(unused_argv):
       }
 
     def weight_selfsup_fn():
+
       step = uflow_flags.step % FLAGS.selfsup_step_cycle
       # Start self-supervision only after a certain number of steps.
       # Linearly increase self-supervision weight for a number of steps.
@@ -292,6 +295,7 @@ def main(unused_argv):
         # recompilation of the training graph defined in uflow.train(...).
         current_weights['selfsup'] = weight_selfsup_fn
 
+
         # Freeze model for teacher distillation.
         if teacher_feature_model is None and FLAGS.frozen_teacher:
           # Create a copy of the existing models and freeze them as a teacher.
@@ -311,7 +315,10 @@ def main(unused_argv):
                 teacher_flow_model,
                 prev_flow_output=test_frozen_flow)
 
+
       # Train for an epoch and save the results.
+
+      uflow.train()
       log_update = uflow.trainer(train_it, num_steps=FLAGS.epoch_length, weights=current_weights, progress_bar=True,
                                   plot_dir=FLAGS.plot_dir if FLAGS.plot_debug_info else None,
                                   distance_metrics=distance_metrics, occ_active=occ_active)
@@ -326,7 +333,7 @@ def main(unused_argv):
       if FLAGS.checkpoint_dir and not FLAGS.no_checkpointing:
 
 
-        """Saves a model checkpoint."""
+        """Saves a model checkpoints."""
         torch.save({
             "epoch": uflow_flags.step // FLAGS.epoch_length,
             "optimizer": uflow._optimizer.state_dict(),
@@ -337,10 +344,11 @@ def main(unused_argv):
       # Print losses from last epoch.
       uflow_plotting.print_log(log, epoch)
 
-      if FLAGS.eval_on and FLAGS.evaluate_during_train:
-        # Evaluate
-        eval_results = evaluate(uflow)
-        uflow_plotting.print_eval(eval_results)
+      if epoch % 10 == 0:
+          if FLAGS.eval_on and FLAGS.evaluate_during_train:
+            # Evaluate
+            eval_results = evaluate(uflow)
+            uflow_plotting.print_eval(eval_results)
 
       if current_step >= FLAGS.num_train_steps:
         break
@@ -350,10 +358,10 @@ def main(unused_argv):
   else:
     print('Specify flag train_on to enable training to <format>:<path>;... .')
     print('Just doing evaluation now.')
-    # eval_results = evaluate(uflow)
-    # if eval_results:
-    #     uflow_plotting.print_eval(eval_results)
-    # print('Evaluation complete.')
+    eval_results = evaluate(uflow)
+    if eval_results:
+        uflow_plotting.print_eval(eval_results)
+    print('Evaluation complete.')
 
 if __name__ == '__main__':
   app.run(main)

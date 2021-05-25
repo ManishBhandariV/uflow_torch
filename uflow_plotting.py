@@ -6,7 +6,7 @@ import matplotlib
 matplotlib.use('Agg')  # None-interactive plots do not need tk
 import matplotlib.pyplot as plt  # pylint: disable=g-import-not-at-top
 import numpy as np
-import tensorflow as tf
+
 # import flowpy
 
 
@@ -67,24 +67,26 @@ def save_and_close(filename):
 def flow_to_rgb(flow):
   """Computes an RGB visualization of a flow field."""
   shape = list(flow.shape)
+  # print(shape)
 
   height, width = [float(s) for s in shape[-2:]]
   scaling = _FLOW_SCALING_FACTOR / (height**2 + width**2)**0.5
 
   motion_angle = np.arctan2(flow[1, Ellipsis], flow[0, Ellipsis])
   motion_magnitude = (flow[1, Ellipsis]**2 + flow[0, Ellipsis]**2)**0.5
-
+  # print(motion_angle.shape)
+  # print(motion_magnitude.shape)
   # Visualize flow using the HSV color space, where angles are represented by
   # hue and magnitudes are represented by saturation.
 
   flow_hsv = np.stack([((motion_angle / np.math.pi) + 1.) / 2.,
                          np.clip(motion_magnitude * scaling, 0.0, 1.0),
                          np.ones_like(motion_magnitude)],
-                        axis= 1)
+                        axis= -1)
 
   # Transform colors from HSV to RGB color space for plotting.
-
-  return matplotlib.colors.hsv_to_rgb(np.rollaxis(flow_hsv, 0,-1))
+  # print(flow_hsv.shape)
+  return matplotlib.colors.hsv_to_rgb(flow_hsv)
 
 
 
@@ -165,7 +167,8 @@ def complete_paper_plot(plot_dir,
   plt.figure()
   plt.clf()
 
-  plt.imshow(np.rollaxis((image1 + image2) / 2.),0,-1)
+  plt.imshow(np.moveaxis(((image1 + image2) / 2.),0,-1))
+
   save_fig('image_rgb', plot_dir)
   # np.save("flow_pred"+plot_dir,flow_uv)
   plt.imshow(flow_to_rgb(flow_uv))
@@ -176,17 +179,18 @@ def complete_paper_plot(plot_dir,
 
   endpoint_error = np.sum(
       (ground_truth_flow_uv - flow_uv)**2, axis= 0 , keepdims=True)**0.5
+
   plt.imshow(
-      (endpoint_error * flow_valid_occ)[0, :, :],
+      (endpoint_error * flow_valid_occ)[0],
       cmap='viridis',
       vmin=0,
       vmax=40)
   save_fig('flow_error', plot_dir)
 
-  plt.imshow((predicted_occlusion[0, :, :]) * 255, cmap='Greys')
+  plt.imshow((predicted_occlusion[0]) * 255, cmap='Greys')
   save_fig('predicted_occlusion', plot_dir)
 
-  plt.imshow((ground_truth_occlusion[0, :, :]) * 255, cmap='Greys')
+  plt.imshow((ground_truth_occlusion[0]) * 255, cmap='Greys')
   save_fig('ground_truth_occlusion', plot_dir)
 
   plt.close('all')

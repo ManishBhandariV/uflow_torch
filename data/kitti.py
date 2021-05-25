@@ -10,11 +10,15 @@ import  numpy as np
 from collections import defaultdict
 import sys
 from torch.utils.tensorboard import SummaryWriter
+import random
+import cv2
 
 import uflow_flags
 import uflow_utils
 from uflow_utils import resize
 import uflow_gpu_utils
+import uflow_plotting
+
 
 FLAGS = flags.FLAGS
 
@@ -47,7 +51,7 @@ class CustomDataSet(Dataset):
                 image_tuples = [[image_files[i], image_files[i + 1]] for i in range(len(image_files) - 1)]
                 self.data_tuples.append(image_tuples)
 
-        # random.shuffle(self.data_tuples)
+        random.shuffle(self.data_tuples)
         self.data_tuples = [pair for seq in self.data_tuples for pair in seq]
 
         self.height = height
@@ -82,7 +86,8 @@ def make_dataset(path,
                  resize_gt_flow=True,
                  entire_seq = False,
                  seed=41):
-# path = "/home/manish/winshare/datasets/data_scene_flow_multiview"
+# path_train = "/home/manish/winshare/datasets/data_scene_flow_multiview"
+#path_eval= "/home/manish/winshare/datasets/data_scene_flow_multiview/data_scene_flow"
 
     if ',' in path:
         l = path.split(',')
@@ -136,24 +141,22 @@ class CustomDataSetEval(Dataset):
         # tensor_image2 = resize(tensor_image2, height=self.height, width=self.width, is_flow=False)
 
         flow_occ_loc = os.path.join(self.occ_dir, self.data_tuples[idx][0])
-        flow_occ = Image.open(flow_occ_loc)
-        flow_occ = np.array(flow_occ, dtype=np.uint16)
+        flow_occ = cv2.imread(flow_occ_loc, cv2.IMREAD_ANYDEPTH|cv2.IMREAD_COLOR)
+        flow_occ = flow_occ[:, :, ::-1].astype(np.float32)
         flow_uv_occ = (flow_occ[Ellipsis, :2].astype(np.float32) - 2 ** 15) / 64.0
-        flow_uv_occ = np.rollaxis(flow_uv_occ, -1, 0)
         flow_valid_occ = flow_occ[Ellipsis, 2:3].astype(np.uint8)
-        flow_valid_occ = np.rollaxis(flow_valid_occ, -1, 0)
-        flow_uv_occ = torch.from_numpy(flow_uv_occ)
-        flow_valid_occ = torch.from_numpy(flow_valid_occ)
+
+        flow_uv_occ = torch.from_numpy(flow_uv_occ).permute(2,0,1)
+        flow_valid_occ = torch.from_numpy(flow_valid_occ).permute(2,0,1)
 
         flow_noc_loc = os.path.join(self.noc_dir, self.data_tuples[idx][0])
-        flow_noc = Image.open(flow_noc_loc)
-        flow_noc = np.array(flow_noc, dtype=np.uint16)
+        flow_noc = cv2.imread(flow_noc_loc, cv2.IMREAD_ANYDEPTH|cv2.IMREAD_COLOR)
+        flow_noc = flow_noc[:, :, ::-1].astype(np.float32)
         flow_uv_noc = (flow_noc[Ellipsis, :2].astype(np.float32) - 2 ** 15) / 64.0
-        flow_uv_noc = np.rollaxis(flow_uv_noc, -1, 0)
         flow_valid_noc = flow_noc[Ellipsis, 2:3].astype(np.uint8)
-        flow_valid_noc = np.rollaxis(flow_valid_noc, -1, 0)
-        flow_uv_noc = torch.from_numpy(flow_uv_noc)
-        flow_valid_noc = torch.from_numpy(flow_valid_noc)
+
+        flow_uv_noc = torch.from_numpy(flow_uv_noc).permute(2,0,1)
+        flow_valid_noc = torch.from_numpy(flow_valid_noc).permute(2,0,1)
 
         return torch.stack([tensor_image1, tensor_image2], dim= 0) , flow_uv_occ, flow_uv_noc, flow_valid_occ, flow_valid_noc
 
@@ -190,6 +193,7 @@ def make_eval_dataset(path,
 
     return dataset
 
+@torch.no_grad()
 def evaluate(inference_fn,
              dataset,
              height,
@@ -242,8 +246,11 @@ def evaluate(inference_fn,
     (image_batch, flow_uv_occ, flow_uv_noc, flow_valid_occ,
      flow_valid_noc) = test_batch
 
-    flow_valid_occ = flow_valid_occ.type(torch.float32)
-    flow_valid_noc = flow_valid_noc.type(torch.float32)
+    image_batch = torch.squeeze(image_batch,0).to(uflow_gpu_utils.device)
+    flow_uv_occ = torch.squeeze(flow_uv_occ,0).to(uflow_gpu_utils.device)
+    flow_uv_noc = torch.squeeze(flow_uv_noc, 0).to(uflow_gpu_utils.device)
+    flow_valid_occ = torch.squeeze(flow_valid_occ.type(torch.float32),0).to(uflow_gpu_utils.device)
+    flow_valid_noc = torch.squeeze(flow_valid_noc.type(torch.float32),0).to(uflow_gpu_utils.device)
 
 
   # pylint:disable=cell-var-from-loop
@@ -253,10 +260,9 @@ def evaluate(inference_fn,
         input_height=height,
         input_width=width,
         infer_occlusion=True)
-    inference_time_in_ms, (flow, soft_occlusion_mask) = uflow_utils.time_it(
+    inference_time_in_ms, (final_flow, soft_occlusion_mask) = uflow_utils.time_it(
         f, execute_once_before=i == 0)
     inference_times.append(inference_time_in_ms)
-
     occ_mask_gt = flow_valid_occ - flow_valid_noc
     f_dict = uflow_utils.compute_f_metrics(soft_occlusion_mask * flow_valid_occ,
                                           occ_mask_gt * flow_valid_occ)
@@ -276,9 +282,10 @@ def evaluate(inference_fn,
 
     mask_thresh = torch.greater(soft_occlusion_mask, best_thresh).type(torch.float32)
     # Image coordinates are swapped in labels
-    final_flow = flow.numpy()
-    final_flow = final_flow[::-1, Ellipsis]
-    final_flow = torch.from_numpy(final_flow)
+    # final_flow = flow.detach().cpu().numpy()
+    # final_flow = final_flow[::-1, Ellipsis]
+    #
+    # final_flow = torch.from_numpy(final_flow.copy()).to(uflow_gpu_utils.device)
 
 
     endpoint_error_occ = torch.sum((final_flow - flow_uv_occ)**2, dim= 1, keepdim=True)**0.5
@@ -291,25 +298,25 @@ def evaluate(inference_fn,
     outliers_noc = torch.logical_and(endpoint_error_noc > 3.,
                        endpoint_error_noc > 0.05 * gt_flow_abs).type(torch.float32)
 
-    epe_occ.append(torch.sum(flow_valid_occ * endpoint_error_occ))
-    errors_occ.append(torch.sum(flow_valid_occ * outliers_occ))
-    valid_occ.append(torch.sum(flow_valid_occ))
+    epe_occ.append(torch.sum(flow_valid_occ * endpoint_error_occ).item())
+    errors_occ.append(torch.sum(flow_valid_occ * outliers_occ).item())
+    valid_occ.append(torch.sum(flow_valid_occ).item())
 
     epe_noc.append(
-        torch.sum(flow_valid_noc * endpoint_error_noc))
-    errors_noc.append(torch.sum(flow_valid_noc * outliers_noc))
-    valid_noc.append(torch.sum(flow_valid_noc))
+        torch.sum(flow_valid_noc * endpoint_error_noc).item())
+    errors_noc.append(torch.sum(flow_valid_noc * outliers_noc).item())
+    valid_noc.append(torch.sum(flow_valid_noc).item())
 
     if plot_dir and i < num_plots:
       uflow_plotting.complete_paper_plot(
           plot_dir,
           i,
-          image_batch[0].numpy(),
-          image_batch[1].numpy(),
-          final_flow.numpy(),
-          flow_uv_occ.numpy(),
-          flow_valid_occ.numpy(), (1. - mask_thresh).numpy(),
-          (1. - occ_mask_gt).numpy(),
+          image_batch[0].detach().cpu().numpy(),
+          image_batch[1].detach().cpu().numpy(),
+          final_flow.detach().cpu().numpy(),
+          flow_uv_occ.detach().cpu().numpy(),
+          flow_valid_occ.detach().cpu().numpy(), (1. - mask_thresh).detach().cpu().numpy(),
+          (1. - occ_mask_gt).detach().cpu().numpy(),
           frame_skip=None)
   if progress_bar:
     sys.stdout.write('\n')
@@ -337,10 +344,9 @@ def evaluate(inference_fn,
           eval_stop_in_s - eval_start_in_s,
   }
 
-  writer = SummaryWriter(log_dir=FLAGS.summary_dir)
+  writer = SummaryWriter(log_dir=FLAGS.tensorboard_logdir_eval)
   for key, val in results.items():
-      step = uflow_flags.step
-      writer.add_scalar(key, val, step)
+      writer.add_scalar(key, val, uflow_flags.step // FLAGS.epoch_length)
 
   return results
 

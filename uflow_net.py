@@ -28,7 +28,7 @@ class UFlow(torch.nn.Module):
     """Instantiate a UFlow model.
 
     Args:
-      checkpoint_dir: str, location to checkpoint model
+      checkpoint_dir: str, location to checkpoints model
       summary_dir: str, location to write tensorboard summary
       optimizer: str, identifier of which optimizer to use
       learning_rate: float, learning rate to use for training
@@ -176,7 +176,7 @@ class UFlow(torch.nn.Module):
       uflow_flags.step = steps*FLAGS.epoch_length
 
   # def save(self):
-  #   """Saves a model checkpoint."""
+  #   """Saves a model checkpoints."""
   #   torch.save({
   #   "epoch": uflow_flags.step // FLAGS.epoch_length,
   #   "optimizer" :self._optimizer.state_dict(),
@@ -256,7 +256,7 @@ class UFlow(torch.nn.Module):
       Optical flow for each pixel in image1 pointing to image2.
     """
 
-    batch_size, seq_len, image_channels, orig_height, orig_width, image_channels = list(images.shape)
+    batch_size, seq_len, image_channels, orig_height, orig_width = list(images.shape)
 
     if input_height is None:
       input_height = orig_height
@@ -415,13 +415,17 @@ class UFlow(torch.nn.Module):
 
     start_time_data = time.time()
     for _, batch in zip(range(num_steps), data_it):
+
      # with autograd.detect_anomaly():
       stop_time_data = time.time()
 
       if progress_bar:
         sys.stdout.write('.')
         sys.stdout.flush()
+      weightiii = {}
 
+      for name, param in self.named_parameters():
+        weightiii[name] = (param.clone())
       # Split batch into images, occlusion masks, and ground truth flow.
       self._optimizer.zero_grad()
       images, labels = batch
@@ -449,8 +453,18 @@ class UFlow(torch.nn.Module):
             occ_active=occ_active)
 
       losses['total-loss'].backward()
+
+      # print(a)
+      print("*"*200)
       self._optimizer.step()
+      weightii = {}
+      for name, param in self.named_parameters():
+        weightii[name] = param.clone()
       stop_time_train_step = time.time()
+      for name, _ in self.named_parameters():
+        if (torch.equal(weightiii[name], weightii[name])):
+            print(name)
+            # print(self.parameters())
 
       log_update = losses
       # Compute time in ms.
@@ -479,9 +493,7 @@ class UFlow(torch.nn.Module):
       log[key] = np.mean(log[key])
       if self.summary_dir:
           self.writer.add_scalar(key, log[key], uflow_flags.step // FLAGS.epoch_length)
-    print("\n")
-    print("Epoch:",uflow_flags.step // FLAGS.epoch_length)
-    print(log)
+
 
     if progress_bar:
       sys.stdout.write('\n')
