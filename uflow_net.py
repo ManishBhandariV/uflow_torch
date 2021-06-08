@@ -11,6 +11,9 @@ import uflow_model
 import uflow_utils
 import numpy as np
 
+import matplotlib.pyplot as plt
+import matplotlib
+
 FLAGS = flags.FLAGS
 
 class UFlow(torch.nn.Module):
@@ -429,7 +432,6 @@ class UFlow(torch.nn.Module):
       # Split batch into images, occlusion masks, and ground truth flow.
       self._optimizer.zero_grad()
       images, labels = batch
-      # print(images.shape)
 
 
       ground_truth_flow = labels.get('flow_uv', None)
@@ -457,13 +459,13 @@ class UFlow(torch.nn.Module):
       # print(a)
       print("*"*200)
       self._optimizer.step()
-      weightii = {}
-      for name, param in self.named_parameters():
-        weightii[name] = param.clone()
+      # weightii = {}
+      # for name, param in self.named_parameters():
+      #   weightii[name] = param.clone()
       stop_time_train_step = time.time()
-      for name, _ in self.named_parameters():
-        if (torch.equal(weightiii[name], weightii[name])):
-            print(name)
+      # for name, _ in self.named_parameters():
+      #   if (torch.equal(weightiii[name], weightii[name])):
+      #       print(name)
             # print(self.parameters())
 
       log_update = losses
@@ -493,7 +495,7 @@ class UFlow(torch.nn.Module):
       log[key] = np.mean(log[key])
       if self.summary_dir:
           self.writer.add_scalar(key, log[key], uflow_flags.step // FLAGS.epoch_length)
-
+      print("###########################################")
 
     if progress_bar:
       sys.stdout.write('\n')

@@ -27,11 +27,11 @@ def normalize_features(feature_list, normalize, center, moments_across_channels,
   axes = [-3, -2, -1] if moments_across_channels else [-3, -2]
   for feature_image in feature_list:
     if moments_across_channels:
-      mean = torch.mean(feature_image.view(feature_image.shape[0],1,1, -1), dim= 3, keepdim=True)
-      variance = torch.var(feature_image.view(feature_image.shape[0], 1, 1, -1), unbiased= False, dim=3, keepdim=True)
+      mean = torch.mean(feature_image.reshape(feature_image.shape[0],1,1, -1), dim= 3, keepdim=True)
+      variance = torch.var(feature_image.reshape(feature_image.shape[0], 1, 1, -1), unbiased= False, dim=3, keepdim=True)
     else:
-      mean = torch.mean(feature_image.view(feature_image.shape[0], feature_image.shape[1], 1, -1), dim=3, keepdim=True)
-      variance = torch.var(feature_image.view(feature_image.shape[0], feature_image.shape[1], 1, -1), unbiased=False, dim=3, keepdim=True)
+      mean = torch.mean(feature_image.reshape(feature_image.shape[0], feature_image.shape[1], 1, -1), dim=3, keepdim=True)
+      variance = torch.var(feature_image.reshape(feature_image.shape[0], feature_image.shape[1], 1, -1), unbiased=False, dim=3, keepdim=True)
 
     statistics['mean'].append(mean)
     statistics['var'].append(variance)
@@ -129,24 +129,13 @@ class PWCFlow(torch.nn.Module):
     self._shared_flow_decoder = shared_flow_decoder
 
     self._refine_model = self._build_refinement_model(in_channel= 34)
-    # self._refine_model = None
-
     self._flow_layers = self._build_flow_layers(in_channels= int(81 + self._num_context_up_channels * self._channel_multiplier))
-    # self._flow_layers = None
-
     if not self._use_cost_volume:
       self._cost_volume_surrogate_convs = self._build_cost_volume_surrogate_convs()
-
     if num_channels_upsampled_context:
       self._context_up_layers = self._build_upsample_layers(in_channels= int(self._num_context_up_channels * self._channel_multiplier), out_channels= int(self._num_context_up_channels * self._channel_multiplier))
-      # self._context_up_layers = None
-
     if self._shared_flow_decoder:
-      # pylint:disable=invalid-name
       self._1x1_shared_decoder = self._build_1x1_shared_decoder()
-      # self._1x1_shared_decoder = None
-
-
 
   def forward(self, feature_pyramid1, feature_pyramid2, training=False):
     """Run the model."""
@@ -201,7 +190,7 @@ class PWCFlow(torch.nn.Module):
 
       if self._shared_flow_decoder:
         # This will ensure to work for arbitrary feature sizes per level.
-        conv_1x1 = self._1x1_shared_decoder[level]
+        conv_1x1 = self._1x1_shared_decoder[level-1]
         features1 = conv_1x1(features1)
 
       # Compute context and flow from previous flow, cost volume, and features1.
@@ -222,7 +211,7 @@ class PWCFlow(torch.nn.Module):
         flow_layers = self._flow_layers
       else:
         # self._flow_layers = self._build_flow_layers(in_channels=x_in.shape[1])
-        flow_layers = self._flow_layers[level]
+        flow_layers = self._flow_layers[level-1]
       for layer in flow_layers[:-1]:
         pad = torch.nn.ConstantPad2d((1, 1, 1, 1), 0)
         x_in = pad(x_in)
@@ -248,7 +237,7 @@ class PWCFlow(torch.nn.Module):
       flow_up = uflow_utils.upsample(flow, is_flow=True)
       if self._num_context_up_channels:
         # self._context_up_layers = self._build_upsample_layers(in_channels= context.shape[1] , out_channels=int(self._num_context_up_channels * self._channel_multiplier))
-        context_up = self._context_up_layers[level](context)
+        context_up = self._context_up_layers[level -1](context)
 
       # Append results to list.
       flows.insert(0, flow)
@@ -285,7 +274,7 @@ class PWCFlow(torch.nn.Module):
     # layer = torch.nn.ConvTranspose2d(in_channels= in_channels, out_channels= out_channels,
     #                                   kernel_size= (4,4), stride=(2, 2), padding=(1, 1))
     layers = torch.nn.ModuleList()
-    for i in range(self._num_levels):
+    for i in range(self._num_levels -1):      #-1 because flow is not calculated at level 0
     #   if i == 0:
     #     layers.append(torch.nn.ConvTranspose2d(in_channels=3, out_channels=num_channels,
     #                              kernel_size=(4, 4), stride=(2, 2), padding=(1, 1)))
@@ -300,7 +289,7 @@ class PWCFlow(torch.nn.Module):
     # Empty list of layers level 0 because flow is only estimated at levels > 0.
     # result = [[]]
     result = torch.nn.ModuleList()
-    result.append(torch.nn.Conv2d(in_channels= in_channels, out_channels= in_channels, kernel_size= (1,1)))
+    # result.append(torch.nn.Conv2d(in_channels= in_channels, out_channels= in_channels, kernel_size= (1,1)))
     for j in range(1, self._num_levels):
       # layers = []
       layers = torch.nn.ModuleList()
@@ -360,7 +349,7 @@ class PWCFlow(torch.nn.Module):
     # Empty list of layers level 0 because flow is only estimated at levels > 0.
     # result = [[]]
     result = torch.nn.ModuleList()
-    result.append(torch.nn.Conv2d(in_channels= 32, out_channels= 32, kernel_size= (1,1), stride= (1,1)))
+    # result.append(torch.nn.Conv2d(in_channels= 32, out_channels= 32, kernel_size= (1,1), stride= (1,1)))
     for _ in range(1, self._num_levels):
       result.append(
           torch.nn.Conv2d(in_channels= 32, out_channels= 32, kernel_size= (1,1), stride= (1,1)))
@@ -428,12 +417,10 @@ class PWCFeaturePyramid(torch.nn.Module):
     assert all(t[0] > 0 for t in filters)
 
     self._leaky_relu_alpha = leaky_relu_alpha
-    # self._convs = []
     self._convs = torch.nn.ModuleList()
     self._level1_num_1x1 = level1_num_1x1
 
     for level, (num_layers, num_filters) in enumerate(filters):
-      # group = []
       group = torch.nn.ModuleList()
       for i in range(num_layers):
         stride = 1
@@ -445,12 +432,12 @@ class PWCFeaturePyramid(torch.nn.Module):
           conv = torch.nn.Conv2d(in_channels=3, out_channels=int(num_filters * self._channel_multiplier),
                                  kernel_size=(3, 3) if level > 0 or i < num_layers - level1_num_1x1 else (1, 1),
                                  stride=(stride, stride))
-        elif level == 0:
-
-          conv = torch.nn.Conv2d(in_channels=int(num_filters * self._channel_multiplier),
-                                 out_channels=int(num_filters * self._channel_multiplier),
-                                 kernel_size=(3, 3) if level > 0 or i < num_layers - level1_num_1x1 else (1, 1),
-                                 stride=(stride, stride))
+        # elif level == 0:
+        #
+        #   conv = torch.nn.Conv2d(in_channels=int(num_filters * self._channel_multiplier),
+        #                          out_channels=int(num_filters * self._channel_multiplier),
+        #                          kernel_size=(3, 3) if level > 0 or i < num_layers - level1_num_1x1 else (1, 1),
+        #                          stride=(stride, stride))
 
         elif i == 0:
 
@@ -479,10 +466,9 @@ class PWCFeaturePyramid(torch.nn.Module):
         if level > 0 or i < len(conv_tuple) - self._level1_num_1x1:
           pad = torch.nn.ConstantPad2d((1, 1, 1, 1), 0)
           x = pad(x)
-          x = conv(x)
-          relu = torch.nn.LeakyReLU(negative_slope=self._leaky_relu_alpha)
-          x = relu(x)
-
+        x = conv(x)
+        relu = torch.nn.LeakyReLU(negative_slope=self._leaky_relu_alpha)
+        x = relu(x)
       features.append(x)
 
     if split_features_by_sample:
@@ -496,7 +482,12 @@ class PWCFeaturePyramid(torch.nn.Module):
 
 # feat = PWCFeaturePyramid()
 # flow = PWCFlow()
-#
+# a = torch.ones((1,3,640,640),dtype = torch.float32)
+# feat1 = feat(a)
+# for i in feat1:
+#   print(i.shape)
+# flow1 = flow(feat1, feat1)
+
 # names1 = []
 # for name, _ in feat.named_parameters():
 #   names1.append(name)

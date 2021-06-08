@@ -16,35 +16,48 @@
 """Functions for resampling images."""
 
 import torch
+import uflow_gpu_utils
 
 
-def torch_gather_nd(params, indices):
-  params = torch.moveaxis(params, 1, -1)
-  indices = torch.moveaxis(indices, 1, -1)
-  if len(indices.shape) <= 2:
-    ans = [params[(*indi,)] for indi in indices]
-    return torch.stack(ans)
-  elif len(indices.shape) == 3:
-    b = []
-    for i in indices:
-      a = []
-      for j in i:
-        a.append(params[(*j,)])
-      b.append(torch.tensor(a))
-    return torch.stack(b)
-  else:
-    c = []
-    for i in indices:
-      b = []
-      for j in i:
-        a = []
-        for k in j:
-          a.append(params[(*k,)])
-        b.append(torch.stack(a))
-      c.append(torch.stack(b))
-    d = torch.stack(c)
-    d = torch.moveaxis(d, -1, 1)
-    return d
+# def torch_gather_nd(params, indices):
+#   params = torch.moveaxis(params, 1, -1)
+#   indices = torch.moveaxis(indices, 1, -1)
+#   if len(indices.shape) <= 2:
+#     ans = [params[(*indi,)] for indi in indices]
+#     return torch.stack(ans)
+#   elif len(indices.shape) == 3:
+#     b = []
+#     for i in indices:
+#       a = []
+#       for j in i:
+#         a.append(params[(*j,)])
+#       b.append(torch.tensor(a))
+#     return torch.stack(b)
+#   else:
+#     c = []
+#     for i in indices:
+#       b = []
+#       for j in i:
+#         a = []
+#         for k in j:
+#           a.append(params[(*k,)])
+#         b.append(torch.stack(a))
+#       c.append(torch.stack(b))
+#     d = torch.stack(c)
+#     d = torch.moveaxis(d, -1, 1)
+#     return d
+
+def gather_nd(params, indices):
+  params = torch.moveaxis(params, (0, 1, 2, 3), (0, 3, 1, 2))
+  indices = torch.moveaxis(indices, (0, 1, 2, 3), (0, 3, 1, 2))
+  indices = indices.type(torch.int64)
+  gathered = params[list(indices.T)]
+  gathered = torch.moveaxis(gathered, (0, 1, 2, 3), (1, 2, 0, 3))
+  gathered = torch.moveaxis(gathered, (0, 1, 2, 3), (0, 2, 3, 1))
+
+  return gathered
+
+
 def safe_gather_nd(params, indices):
   """Gather slices from params into a Tensor with shape specified by indices.
 
@@ -64,18 +77,23 @@ def safe_gather_nd(params, indices):
   params_shape = torch.tensor(params.shape, dtype= torch.int32)
   max_index = params_shape - 1
   min_index = torch.zeros_like(max_index, dtype=torch.int32)
-  clipped_indices = torch.min(torch.max(indices, min_index), max_index)
 
+  # clipped_indices = torch.min(torch.max(indices, min_index), max_index)
+  clipped_indices = torch.stack([indices[:, 0, :, :].clamp(0, max_index[0]), indices[:, 1, :, :].clamp(0, max_index[2]), indices[:, 2, :, :].clamp(0, max_index[3])],dim= 1)
   # Check whether each component of each index is in range [min, max], and
   # allow an index only if all components are in range:
+
+  mask_l = indices >= 0
+  mask_u = torch.stack([indices[:,0,:,:] <= max_index[0], indices[:,1,:,:] <= max_index[2], indices[:,2,:,:] <= max_index[3]],dim= 1)
+
   mask = torch.prod(
-      torch.logical_and(indices >= min_index, indices <= max_index), -1, dtype= params.dtype)
-  mask = torch.unsqueeze(mask, -1)
+      torch.logical_and(mask_l, mask_u), 1, dtype= params.dtype)
+  mask = torch.unsqueeze(mask, 1)
 
-  return (mask *  torch_gather_nd(params, clipped_indices))
+  return (mask *  gather_nd(params,clipped_indices))
 
 
-def resampler(data, warp, name='resampler'):
+def resampler(data, warp):
   """Resamples input data at user defined coordinates.
 
   Args:
@@ -89,18 +107,18 @@ def resampler(data, warp, name='resampler'):
     Tensor of resampled values from `data`. The output tensor shape is
     `[batch_size, dim_0, ... , dim_n, data_num_channels]`.
   """
-  data = torch.tensor(data)
-  warp = torch.tensor(warp)
+  # data = torch.tensor(data)
+  # warp = torch.tensor(warp)
   warp_x, warp_y = torch.unbind(warp, dim= 1)
 
-  return resampler_with_unstacked_warp(data, warp_x, warp_y, name=name)
+  return resampler_with_unstacked_warp(data, warp_x, warp_y)
 
 
 def resampler_with_unstacked_warp(data,
                                   warp_x,
                                   warp_y,
                                   safe=True,
-                                  name='resampler'):
+                                  ):
   """Resamples input data at user defined coordinates.
 
   The resampler functions in the same way as `resampler` above, with the
@@ -131,14 +149,15 @@ def resampler_with_unstacked_warp(data,
   """
 
 
-  warp_x = torch.tensor(warp_x)
-  warp_y = torch.tensor(warp_y)
-  data = torch.tensor(data)
+  # warp_x = torch.tensor(warp_x)
+  # warp_y = torch.tensor(warp_y)
+  # data = torch.tensor(data)
   if not warp_x.shape == warp_y.shape:
     raise ValueError(
         'warp_x and warp_y are of incompatible shapes: %s vs %s ' %
         (str(warp_x.shape), str(warp_y.shape)))
-  warp_shape = torch.tensor(warp_x.shape)
+  warp_shape = torch.tensor(warp_x.shape).to(uflow_gpu_utils.device)
+
   if warp_x.shape[0] != data.shape[0]:
     raise ValueError(
         '\'warp_x\' and \'data\' must have compatible first '
@@ -169,9 +188,10 @@ def resampler_with_unstacked_warp(data,
   # warp_batch_shape = torch.cat(
   #     [warp_shape[0:1], torch.ones_like(warp_shape[1:])], 0)
 
-  warp_batch = torch.arange(warp_shape[0], dtype=torch.int32).reshape(warp_shape[0:1],*torch.ones_like(warp_shape[1:]).tolist())
+  warp_batch = torch.arange(warp_shape[0], dtype=torch.int32).reshape(warp_shape[0:1],*torch.ones_like(warp_shape[1:]).tolist()).to(uflow_gpu_utils.device)
 
   # Broadcast to match shape:
+
   warp_batch = warp_batch +  torch.zeros_like(warp_y, dtype=torch.int32)
   left_warp_weight = torch.unsqueeze(left_warp_weight, dim=1)
   down_warp_weight = torch.unsqueeze(down_warp_weight, dim=1)
@@ -183,17 +203,21 @@ def resampler_with_unstacked_warp(data,
   down_left_warp = torch.stack([warp_batch, warp_ceil_y, warp_floor_x], dim =1)
   down_right_warp = torch.stack([warp_batch, warp_ceil_y, warp_ceil_x], dim=1)
 
-  def gather_nd(params, indices):
-    return (safe_gather_nd if safe else torch_gather_nd)(params, indices)
+  def gather(params, indices):
+    return safe_gather_nd(params,indices)if safe else gather_nd(params,indices)
 
   # gather data then take weighted average to get resample result.
+
   result = (
-      (gather_nd(data, up_left_warp) * left_warp_weight +
-       gather_nd(data, up_right_warp) * right_warp_weight) * up_warp_weight +
-      (gather_nd(data, down_left_warp) * left_warp_weight +
-       gather_nd(data, down_right_warp) * right_warp_weight) *
+      (gather(data, up_left_warp) * left_warp_weight +
+       gather(data, up_right_warp) * right_warp_weight) * up_warp_weight +
+      (gather(data, down_left_warp) * left_warp_weight +
+       gather(data, down_right_warp) * right_warp_weight) *
       down_warp_weight)
-  result_shape = (
-      list(warp_x.shape()) + list(data.shape())[-1:])
-  result.set_shape(result_shape)
+
   return result
+
+# a = torch.arange(1*40*40*32, dtype = torch.float32).reshape(1,32,40,40)
+# b = torch.arange(1*40*40*2, dtype = torch.float32).reshape(1,2,40,40)
+#
+# c = resampler(a,b)

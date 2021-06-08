@@ -155,9 +155,6 @@ def main(unused_argv):
     os.makedirs(FLAGS.plot_dir)
 
   uflow = create_uflow().to(uflow_gpu_utils.device)
-  names = []
-
-
 
   if not FLAGS.from_scratch:
     # First restore from init_checkpoint_dir, which is only restored from but
