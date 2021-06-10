@@ -47,13 +47,22 @@ import uflow_gpu_utils
 #     d = torch.moveaxis(d, -1, 1)
 #     return d
 
+# def gather_nd(params, indices):
+#   params = torch.moveaxis(params, (0, 1, 2, 3), (0, 3, 1, 2))
+#   indices = torch.moveaxis(indices, (0, 1, 2, 3), (0, 3, 1, 2))
+#   indices = indices.type(torch.int64)
+#   gathered = params[list(indices.T)]
+#   gathered = torch.moveaxis(gathered, (0, 1, 2, 3), (1, 2, 0, 3))
+#   gathered = torch.moveaxis(gathered, (0, 1, 2, 3), (0, 2, 3, 1))
+#
+#   return gathered
+
 def gather_nd(params, indices):
   params = torch.moveaxis(params, (0, 1, 2, 3), (0, 3, 1, 2))
   indices = torch.moveaxis(indices, (0, 1, 2, 3), (0, 3, 1, 2))
   indices = indices.type(torch.int64)
   gathered = params[list(indices.T)]
-  gathered = torch.moveaxis(gathered, (0, 1, 2, 3), (1, 2, 0, 3))
-  gathered = torch.moveaxis(gathered, (0, 1, 2, 3), (0, 2, 3, 1))
+  gathered = torch.moveaxis(gathered, (0, 1, 2, 3), (3, 2, 0, 1))
 
   return gathered
 
@@ -221,3 +230,4 @@ def resampler_with_unstacked_warp(data,
 # b = torch.arange(1*40*40*2, dtype = torch.float32).reshape(1,2,40,40)
 #
 # c = resampler(a,b)
+# print(c.shape)

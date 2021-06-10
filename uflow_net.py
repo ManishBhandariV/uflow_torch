@@ -430,7 +430,7 @@ class UFlow(torch.nn.Module):
       for name, param in self.named_parameters():
         weightiii[name] = (param.clone())
       # Split batch into images, occlusion masks, and ground truth flow.
-      self._optimizer.zero_grad()
+
       images, labels = batch
 
 
@@ -440,7 +440,7 @@ class UFlow(torch.nn.Module):
       images_without_photo_aug = labels.get('images_without_photo_aug', None)
 
       start_time_train_step = time.time()
-
+      self._optimizer.zero_grad()
       # Use tf.function unless intermediate results have to be plotted.
       # Perform a gradient step without tf.function to allow plotting.
       losses = self.train_step(

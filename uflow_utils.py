@@ -448,6 +448,8 @@ def apply_warps_stop_grad(sources, warps, level):
     warped[(i, j, t)] = resample(
         sources[j], warps[(i, j, t)][level])
 
+    sources[j].requires_grad = True
+
   return warped
 
 
@@ -737,7 +739,7 @@ def compute_loss(
 
       mask_level0 = ground_truth_occlusions * valid_warp_masks[key][0]
 
-      mask_level0.requires_grad = False
+      mask_level0.detach()
       height, width = list(valid_warp_masks[key][1].shape)[-2:]
 
     if 'photo' in weights:
@@ -746,7 +748,7 @@ def compute_loss(
           weights['photo'] * (mask_level0 * error).sum() /
           (mask_level0.sum() + 1e-16) / num_pairs)
 
-      losses['photo'].requires_grad = True
+      # losses['photo'].requires_grad = True
 
     if 'smooth2' in weights or 'smooth1' in weights:
 
@@ -786,7 +788,7 @@ def compute_loss(
             ((weights_x * robust_l1(flow_gx)).sum() +
              (weights_y * robust_l1(flow_gy)).sum()) / 2. /
             num_pairs)
-        losses['smooth1'].requires_grad = True
+        # losses['smooth1'].requires_grad = True
 
         if plot_dir is not None:
           uflow_plotting.plot_smoothness(key, images, weights_x, weights_y,
@@ -826,7 +828,7 @@ def compute_loss(
       losses['ssim'] += weights['ssim'] * (
           (ssim_error * avg_weight).sum() /
           ((avg_weight).sum() + 1e-16) / num_pairs)
-      losses['ssim'].requires_grad = True
+      # losses['ssim'].requires_grad = True
 
     if 'census' in weights:
       losses['census'] += weights['census'] * census_loss(
